@@ -1,187 +1,199 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import axios from 'axios';
 import {
   Area,
   AreaChart,
   Bar,
-  BarChart,
   CartesianGrid,
   ComposedChart,
   Legend,
+  Line,
+  LineChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
 } from 'recharts';
+import {
+  descargarReporteExcel,
+  obtenerLineas,
+  obtenerResumenDashboard,
+} from './api';
 
-// --- Cliente API con interceptor JWT integrado ---
-const getBaseUrl = () => {
-  try {
-    if (typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_URL) {
-      return import.meta.env.VITE_API_URL;
-    }
-  } catch {
-    // Entorno sin import.meta.env
-  }
-  return 'http://127.0.0.1:8000';
-};
+// --- Iconos SVG Inline reutilizables (sin dependencias adicionales) ---
+const AlertTriangleIcon = ({ size = 22, color = '#dc2626' }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke={color}
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    style={{ flexShrink: 0 }}
+  >
+    <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" />
+    <line x1="12" y1="9" x2="12" y2="13" />
+    <line x1="12" y1="17" x2="12.01" y2="17" />
+  </svg>
+);
 
-const api = axios.create({
-  baseURL: getBaseUrl(),
-  timeout: 6000,
-});
+const CheckCircleIcon = ({ size = 20, color = '#16a34a' }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke={color}
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    style={{ flexShrink: 0 }}
+  >
+    <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+    <polyline points="22 4 12 14.01 9 11.01" />
+  </svg>
+);
 
-api.interceptors.request.use((config) => {
-  const token = localStorage.getItem('token');
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
-  }
-  return config;
-});
+const RefreshIcon = ({ size = 16, spinning = false }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    style={{
+      animation: spinning ? 'spin 1s linear infinite' : 'none',
+      transformOrigin: 'center',
+    }}
+  >
+    <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+    <path d="M3 3v5h5" />
+    <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
+    <path d="M16 21h5v-5" />
+  </svg>
+);
 
-// --- Datos de respaldo para vista previa cuando el backend local está apagado ---
+const DownloadIcon = ({ size = 16 }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
+    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+    <polyline points="7 10 12 15 17 10" />
+    <line x1="12" y1="15" x2="12" y2="3" />
+  </svg>
+);
+
+const LogOutIcon = ({ size = 16 }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
+    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+    <polyline points="16 17 21 12 16 7" />
+    <line x1="21" y1="12" x2="9" y2="12" />
+  </svg>
+);
+
+// --- Datos simulados para previsualización inmediata si el backend está apagado ---
 const DEMO_LINEAS = [
   {
     id: 1,
     nombre: 'Línea Piloto 1 — Sector Norte',
-    metros_totales: 1500,
+    metros_totales: 2000,
     fecha_inicio: '2026-10-01T08:00:00Z',
-    fecha_meta: '2026-10-25T18:00:00Z',
+    fecha_meta: '2026-11-20T18:00:00Z',
     estado: 'activa',
   },
   {
     id: 2,
-    nombre: 'Línea Fondeo 2 — Bahía Sur',
-    metros_totales: 2200,
-    fecha_inicio: '2026-09-20T08:00:00Z',
-    fecha_meta: '2026-10-16T18:00:00Z',
+    nombre: 'Línea Fondeo 2 — Bahía Sur (En Desfase)',
+    metros_totales: 2500,
+    fecha_inicio: '2026-09-15T08:00:00Z',
+    fecha_meta: '2026-11-01T18:00:00Z',
     estado: 'activa',
   },
 ];
 
-const DEMO_REGISTROS = {
-  1: [
-    {
-      id: 'a1b2c3d4-1111-4000-8000-000000000001',
-      linea_id: 1,
-      metros_avanzados: 180,
-      fecha: '2026-10-12T10:15:00Z',
-      latitud: -39.81422,
-      longitud: -73.24589,
-      estado: 'sincronizado',
-      observacion: 'Instalación inicial de anclajes sin novedad.',
-    },
-    {
-      id: 'a1b2c3d4-2222-4000-8000-000000000002',
-      linea_id: 1,
-      metros_avanzados: 245.5,
-      fecha: '2026-10-13T14:30:00Z',
-      latitud: -39.81495,
-      longitud: -73.24641,
-      estado: 'sincronizado',
-      observacion: 'Buen clima y corriente favorable en turno mañana.',
-    },
-    {
-      id: 'a1b2c3d4-3333-4000-8000-000000000003',
-      linea_id: 1,
-      metros_avanzados: 195,
-      fecha: '2026-10-14T16:45:00Z',
-      latitud: -39.81531,
-      longitud: -73.24702,
-      estado: 'sincronizado',
-      observacion: 'Tramo intermedio completado.',
-    },
-    {
-      id: 'a1b2c3d4-4444-4000-8000-000000000004',
-      linea_id: 1,
-      metros_avanzados: 270,
-      fecha: '2026-10-15T17:10:00Z',
-      latitud: -39.81602,
-      longitud: -73.24788,
-      estado: 'sincronizado',
-      observacion: 'Avance óptimo con cuadrilla completa.',
-    },
-    {
-      id: 'a1b2c3d4-5555-4000-8000-000000000005',
-      linea_id: 1,
-      metros_avanzados: 215.5,
-      fecha: '2026-10-16T15:20:00Z',
-      latitud: -39.81678,
-      longitud: -73.24855,
-      estado: 'sincronizado',
-      observacion: 'Verificación de tensión con GPS en terreno.',
-    },
-  ],
-  2: [
-    {
-      id: 'b2c3d4e5-1111-4000-8000-000000000001',
-      linea_id: 2,
-      metros_avanzados: 310,
-      fecha: '2026-10-11T11:00:00Z',
-      latitud: -39.82115,
-      longitud: -73.2512,
-      estado: 'sincronizado',
-      observacion: 'Inicio de fondeo sector sur.',
-    },
-    {
-      id: 'b2c3d4e5-2222-4000-8000-000000000002',
-      linea_id: 2,
-      metros_avanzados: 140,
-      fecha: '2026-10-13T16:10:00Z',
-      latitud: -39.82198,
-      longitud: -73.25205,
-      estado: 'pendiente',
-      observacion: 'Marejada moderada redujo velocidad de maniobra.',
-    },
-    {
-      id: 'b2c3d4e5-3333-4000-8000-000000000003',
-      linea_id: 2,
-      metros_avanzados: 185,
-      fecha: '2026-10-15T18:00:00Z',
-      latitud: -39.82264,
-      longitud: -73.2529,
-      estado: 'sincronizado',
-      observacion: 'Retoma de ritmo tras ventana meteorológica.',
-    },
-  ],
+const DEMO_RESUMENES = {
+  1: {
+    linea_id: 1,
+    nombre_linea: 'Línea Piloto 1 — Sector Norte',
+    estado_linea: 'activa',
+    metros_totales: 2000,
+    metros_acumulados: 1370.5,
+    metros_restantes: 629.5,
+    porcentaje_avance: 68.53,
+    promedio_diario_7d: 112.4,
+    dias_estimados_termino: 6,
+    fecha_estimada_termino: '2026-11-12T15:00:00Z',
+    alerta_desviacion: false,
+    severidad_desviacion: null,
+    meta_lineal_esperada: 1420.0,
+    desfase_porcentual: 3.49,
+    mensaje_desviacion:
+      'El avance se encuentra dentro del margen de tolerancia planificado.',
+    serie_temporal: [
+      { fecha: '2026-10-18', metros_dia: 95.0, metros_acumulados: 95.0 },
+      { fecha: '2026-10-20', metros_dia: 140.0, metros_acumulados: 235.0 },
+      { fecha: '2026-10-22', metros_dia: 180.5, metros_acumulados: 415.5 },
+      { fecha: '2026-10-25', metros_dia: 210.0, metros_acumulados: 625.5 },
+      { fecha: '2026-10-28', metros_dia: 175.0, metros_acumulados: 800.5 },
+      { fecha: '2026-10-31', metros_dia: 190.0, metros_acumulados: 990.5 },
+      { fecha: '2026-11-02', metros_dia: 230.0, metros_acumulados: 1220.5 },
+      { fecha: '2026-11-05', metros_dia: 150.0, metros_acumulados: 1370.5 },
+    ],
+  },
+  2: {
+    linea_id: 2,
+    nombre_linea: 'Línea Fondeo 2 — Bahía Sur (En Desfase)',
+    estado_linea: 'activa',
+    metros_totales: 2500,
+    metros_acumulados: 920.0,
+    metros_restantes: 1580.0,
+    porcentaje_avance: 36.8,
+    promedio_diario_7d: 42.5,
+    dias_estimados_termino: 38,
+    fecha_estimada_termino: '2026-12-14T18:00:00Z',
+    alerta_desviacion: true,
+    severidad_desviacion: 'ALTA',
+    meta_lineal_esperada: 2150.0,
+    desfase_porcentual: 57.21,
+    mensaje_desviacion:
+      'Desviación detectada: avance real (920.0 m) con desfase del 57.2% respecto a la meta esperada (2150.0 m). La fecha estimada supera la fecha meta planificada.',
+    serie_temporal: [
+      { fecha: '2026-09-20', metros_dia: 120.0, metros_acumulados: 120.0 },
+      { fecha: '2026-09-28', metros_dia: 150.0, metros_acumulados: 270.0 },
+      { fecha: '2026-10-08', metros_dia: 110.0, metros_acumulados: 380.0 },
+      { fecha: '2026-10-15', metros_dia: 95.0, metros_acumulados: 475.0 },
+      { fecha: '2026-10-23', metros_dia: 145.0, metros_acumulados: 620.0 },
+      { fecha: '2026-10-29', metros_dia: 130.0, metros_acumulados: 750.0 },
+      { fecha: '2026-11-03', metros_dia: 85.0, metros_acumulados: 835.0 },
+      { fecha: '2026-11-05', metros_dia: 85.0, metros_acumulados: 920.0 },
+    ],
+  },
 };
 
-const buildDemoResumen = (lineaId) => {
-  const linea = DEMO_LINEAS.find((l) => l.id === Number(lineaId)) || DEMO_LINEAS[0];
-  const regs = DEMO_REGISTROS[linea.id] || [];
-  const acumulados = regs.reduce((acc, r) => acc + Number(r.metros_avanzados || 0), 0);
-  const restantes = Math.max(0, linea.metros_totales - acumulados);
-  const porcentaje = linea.metros_totales > 0 ? (acumulados / linea.metros_totales) * 100 : 0;
-  const promedio7d = acumulados / 7;
-  const diasEstimados = promedio7d > 0 ? restantes / promedio7d : null;
-  const fechaEst =
-    diasEstimados !== null
-      ? new Date(Date.now() + diasEstimados * 86400000).toISOString()
-      : null;
-  const alerta =
-    fechaEst && linea.fecha_meta
-      ? new Date(fechaEst).getTime() > new Date(linea.fecha_meta).getTime()
-      : false;
-
-  return {
-    linea_id: linea.id,
-    linea_nombre: linea.nombre,
-    metros_totales: linea.metros_totales,
-    metros_acumulados: Number(acumulados.toFixed(2)),
-    porcentaje_avance: Number(porcentaje.toFixed(2)),
-    metros_restantes: Number(restantes.toFixed(2)),
-    promedio_diario_ultimos_7_dias: Number(promedio7d.toFixed(2)),
-    dias_estimados_termino: diasEstimados !== null ? Number(diasEstimados.toFixed(1)) : null,
-    fecha_estimada_termino: fechaEst,
-    estado: linea.estado,
-    alerta_atraso: alerta,
-  };
-};
-
-// --- Utilidades de formato ---
-const formatNumber = (value, decimals = 2) => {
+// --- Formateadores numéricos y de fechas ---
+const formatNumber = (value, decimals = 1) => {
   if (value === null || value === undefined || Number.isNaN(Number(value))) {
-    return '0.00';
+    return '0.0';
   }
   return Number(value).toLocaleString('es-CL', {
     minimumFractionDigits: decimals,
@@ -190,7 +202,7 @@ const formatNumber = (value, decimals = 2) => {
 };
 
 const formatDateShort = (isoString) => {
-  if (!isoString) return 'No disponible';
+  if (!isoString) return 'No definida';
   const date = new Date(isoString);
   if (Number.isNaN(date.getTime())) return 'Fecha inválida';
   return date.toLocaleDateString('es-CL', {
@@ -200,20 +212,18 @@ const formatDateShort = (isoString) => {
   });
 };
 
-const formatDateTime = (isoString) => {
-  if (!isoString) return '—';
-  const date = new Date(isoString);
-  if (Number.isNaN(date.getTime())) return '—';
-  return date.toLocaleString('es-CL', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+const formatChartDate = (dateStr) => {
+  if (!dateStr) return '';
+  const parts = dateStr.split('-');
+  if (parts.length === 3) {
+    // Formato YYYY-MM-DD
+    const d = new Date(parts[0], parts[1] - 1, parts[2]);
+    return d.toLocaleDateString('es-CL', { day: '2-digit', month: 'short' });
+  }
+  return dateStr;
 };
 
-// --- Subcomponente: Tarjeta KPI ---
+// --- Subcomponente: Tarjeta KPI Gerencial ---
 function KpiCard({ title, value, subtitle, badge, accentColor = '#2563eb', children }) {
   return (
     <div style={styles.kpiCard}>
@@ -226,6 +236,7 @@ function KpiCard({ title, value, subtitle, badge, accentColor = '#2563eb', child
               ...styles.badge,
               backgroundColor: badge.bg || '#eff6ff',
               color: badge.color || '#1d4ed8',
+              border: badge.border ? `1px solid ${badge.border}` : 'none',
             }}
           >
             {badge.text}
@@ -234,28 +245,30 @@ function KpiCard({ title, value, subtitle, badge, accentColor = '#2563eb', child
       </div>
       <div style={styles.kpiValue}>{value}</div>
       {subtitle && <div style={styles.kpiSubtitle}>{subtitle}</div>}
-      {children && <div style={{ marginTop: '12px' }}>{children}</div>}
+      {children && <div style={{ marginTop: '14px' }}>{children}</div>}
     </div>
   );
 }
 
-// --- Subcomponente: Tooltip personalizado para Recharts ---
+// --- Subcomponente: Tooltip interactivo con unidades 'm' ---
 function CustomChartTooltip({ active, payload, label }) {
   if (!active || !payload || payload.length === 0) return null;
 
   return (
     <div style={styles.tooltipBox}>
-      <p style={styles.tooltipTitle}>{label}</p>
+      <p style={styles.tooltipTitle}>Jornada: {label}</p>
       {payload.map((entry) => (
         <div key={entry.dataKey} style={styles.tooltipRow}>
           <span
             style={{
               ...styles.tooltipDot,
-              backgroundColor: entry.color,
+              backgroundColor: entry.color || entry.fill || entry.stroke,
             }}
           />
           <span style={styles.tooltipLabel}>{entry.name}:</span>
-          <strong style={styles.tooltipValue}>{formatNumber(entry.value)} m</strong>
+          <strong style={styles.tooltipValue}>
+            {formatNumber(entry.value, 1)} m
+          </strong>
         </div>
       ))}
     </div>
@@ -263,24 +276,26 @@ function CustomChartTooltip({ active, payload, label }) {
 }
 
 function Dashboard({ onLogout }) {
+  // Estados principales
   const [lineas, setLineas] = useState([]);
-  const [selectedLineaId, setSelectedLineaId] = useState(null);
-  const [resumen, setResumen] = useState(null);
-  const [registros, setRegistros] = useState([]);
-
-  const [loadingLineas, setLoadingLineas] = useState(true);
-  const [loadingDatos, setLoadingDatos] = useState(false);
-  const [exporting, setExporting] = useState(false);
+  const [lineaSeleccionada, setLineaSeleccionada] = useState(null);
+  const [datos, setDatos] = useState(null); // Resumen del dashboard
+  const [cargando, setCargando] = useState(false);
+  const [cargandoLineas, setCargandoLineas] = useState(true);
   const [error, setError] = useState(null);
+  const [exportando, setExportando] = useState(false);
+  const [tipoGrafico, setTipoGrafico] = useState('combinado'); // 'combinado' | 'lineas' | 'area' | 'barras'
   const [isDemoMode, setIsDemoMode] = useState(false);
-  const [chartType, setChartType] = useState('combinado'); // 'combinado' | 'area' | 'barras'
 
+  // Cerrar sesión
   const handleLogout = useCallback(() => {
     localStorage.removeItem('token');
-    if (onLogout) onLogout();
+    if (onLogout) {
+      onLogout();
+    }
   }, [onLogout]);
 
-  // Manejo centralizado de errores HTTP (incluye expiración de sesión 401)
+  // Manejo centralizado de errores de API
   const handleApiError = useCallback(
     (err, fallbackMessage) => {
       console.error(err);
@@ -294,396 +309,431 @@ function Dashboard({ onLogout }) {
     [handleLogout]
   );
 
-  // Activar datos de demostración si el backend no está encendido
-  const enableDemoFallback = useCallback(() => {
-    setIsDemoMode(true);
-    setError(null);
-    setLineas(DEMO_LINEAS);
-    const initialId = DEMO_LINEAS[0].id;
-    setSelectedLineaId(initialId);
-    setResumen(buildDemoResumen(initialId));
-    setRegistros(DEMO_REGISTROS[initialId] || []);
-    setLoadingLineas(false);
-    setLoadingDatos(false);
-  }, []);
+  // Cargar datos en modo de demostración interactiva si el servidor local está offline
+  const activarModoDemo = useCallback(
+    (lineaIdInicial) => {
+      setIsDemoMode(true);
+      setError(null);
+      setLineas(DEMO_LINEAS);
+      const targetId = lineaIdInicial || DEMO_LINEAS[0].id;
+      setLineaSeleccionada(targetId);
+      setDatos(DEMO_RESUMENES[targetId] || DEMO_RESUMENES[1]);
+      setCargando(false);
+      setCargandoLineas(false);
+    },
+    []
+  );
 
-  // 1. Cargar lista de líneas de fondeo al montar el componente
+  // 1. Obtener la lista de líneas y el resumen inicial al montar
   useEffect(() => {
-    let isMounted = true;
+    let activo = true;
 
-    const fetchLineas = async () => {
-      setLoadingLineas(true);
+    const inicializarDashboard = async () => {
+      setCargandoLineas(true);
       setError(null);
       try {
-        const response = await api.get('/lineas/');
-        if (!isMounted) return;
-        const lista = Array.isArray(response.data) ? response.data : [];
+        const lineasData = await obtenerLineas();
+        if (!activo) return;
         setIsDemoMode(false);
+        const lista = Array.isArray(lineasData) ? lineasData : [];
         setLineas(lista);
-        if (lista.length > 0) {
-          setSelectedLineaId(lista[0].id);
+
+        const initialTargetId = lista.length > 0 ? lista[0].id : '';
+        setLineaSeleccionada(initialTargetId);
+
+        setCargando(true);
+        const resumenData = await obtenerResumenDashboard(initialTargetId);
+        if (!activo) return;
+        setDatos(resumenData);
+        if (resumenData?.linea_id && initialTargetId === '') {
+          setLineaSeleccionada(resumenData.linea_id);
         }
       } catch (err) {
-        if (!isMounted) return;
-        // Si no hay conexión al servidor local (ej. vista previa web), activar modo demo interactivo
+        if (!activo) return;
+        // Si no responde el servidor local, habilitar la vista de respaldo demo interactiva
         if (!err?.response) {
-          enableDemoFallback();
+          activarModoDemo();
           return;
         }
         handleApiError(
           err,
-          'No se pudo cargar el listado de líneas de fondeo desde el servidor.'
+          'No se pudo conectar con el servidor para obtener las líneas de fondeo.'
         );
       } finally {
-        if (isMounted) {
-          setLoadingLineas(false);
+        if (activo) {
+          setCargandoLineas(false);
+          setCargando(false);
         }
       }
     };
 
-    fetchLineas();
+    inicializarDashboard();
     return () => {
-      isMounted = false;
+      activo = false;
     };
-  }, [handleApiError, enableDemoFallback]);
+  }, [handleApiError, activarModoDemo]);
 
-  // 2. Cargar resumen de métricas y registros cada vez que cambia la línea seleccionada
-  const fetchDashboardData = useCallback(
+  // 2. Recargar el resumen del dashboard según la línea seleccionada
+  const recargarMetricas = useCallback(
     async (lineaId) => {
-      if (!lineaId) return;
-
       if (isDemoMode) {
-        setResumen(buildDemoResumen(lineaId));
-        setRegistros(DEMO_REGISTROS[lineaId] || []);
+        if (lineaId && DEMO_RESUMENES[lineaId]) {
+          setDatos(DEMO_RESUMENES[lineaId]);
+        }
         return;
       }
 
-      setLoadingDatos(true);
+      setCargando(true);
       setError(null);
       try {
-        const [resumenResp, registrosResp] = await Promise.all([
-          api.get('/dashboard/resumen', { params: { linea_id: lineaId } }),
-          api.get('/registros/', { params: { linea_id: lineaId } }),
-        ]);
-        setResumen(resumenResp.data);
-        setRegistros(Array.isArray(registrosResp.data) ? registrosResp.data : []);
+        const resumenData = await obtenerResumenDashboard(lineaId);
+        setDatos(resumenData);
+        // Si no había línea seleccionada y el backend asignó una por defecto, sincronizar el selector
+        if (resumenData?.linea_id && (lineaId === null || lineaId === undefined || lineaId === '')) {
+          setLineaSeleccionada(resumenData.linea_id);
+        }
       } catch (err) {
         handleApiError(
           err,
-          'Error al obtener las métricas y registros de la línea seleccionada.'
+          'Error al sincronizar el resumen gerencial de la línea de fondeo.'
         );
       } finally {
-        setLoadingDatos(false);
+        setCargando(false);
       }
     },
-    [handleApiError, isDemoMode]
+    [isDemoMode, handleApiError]
   );
 
-  useEffect(() => {
-    if (selectedLineaId !== null) {
-      fetchDashboardData(selectedLineaId);
-    }
-  }, [selectedLineaId, fetchDashboardData]);
+  // Manejador de cambio de línea desde el selector
+  const handleCambioLinea = async (nuevaLineaId) => {
+    setLineaSeleccionada(nuevaLineaId);
+    await recargarMetricas(nuevaLineaId);
+  };
 
-  // 3. Descargar reporte Excel (.xlsx) mediante Axios con responseType: 'blob'
-  const handleDownloadExcel = async () => {
-    if (!selectedLineaId) return;
+  // 3. Descargar reporte Excel
+  const handleDescargarExcel = async () => {
+    const idToDownload = lineaSeleccionada || datos?.linea_id;
+    if (!idToDownload) return;
 
     if (isDemoMode) {
-      // En modo demo sin backend generamos un CSV compatible con Excel para probar la descarga
-      const regs = DEMO_REGISTROS[selectedLineaId] || [];
-      const header = 'UUID,Linea ID,Fecha,Metros Avanzados,Latitud,Longitud,Estado,Observacion\n';
-      const rows = regs
-        .map(
-          (r) =>
-            `${r.id},${r.linea_id},${r.fecha},${r.metros_avanzados},${r.latitud},${r.longitud},${r.estado},"${r.observacion || ''}"`
-        )
-        .join('\n');
-      const blob = new Blob([header + rows], { type: 'text/csv;charset=utf-8;' });
+      const csv =
+        'Fecha,Metros Dia,Metros Acumulados\n' +
+        (datos?.serie_temporal || [])
+          .map((p) => `${p.fecha},${p.metros_dia},${p.metros_acumulados}`)
+          .join('\n');
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
       const url = window.URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.setAttribute('download', `reporte_avance_linea_${selectedLineaId}_demo.csv`);
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `reporte_avance_linea_${idToDownload}_demo.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
       window.URL.revokeObjectURL(url);
       return;
     }
 
-    setExporting(true);
+    setExportando(true);
     setError(null);
     try {
-      const response = await api.get('/reportes/avance.xlsx', {
-        params: { linea_id: selectedLineaId },
-        responseType: 'blob',
-      });
-
-      const blob = new Blob([response.data], {
-        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      });
-      const downloadUrl = window.URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = downloadUrl;
-      link.setAttribute('download', `reporte_avance_linea_${selectedLineaId}.xlsx`);
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      window.URL.revokeObjectURL(downloadUrl);
+      const blob = await descargarReporteExcel(idToDownload);
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `reporte_avance_linea_${idToDownload}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
     } catch (err) {
       handleApiError(
         err,
-        'No se pudo descargar el reporte Excel. Verifica tu conexión o permisos.'
+        'No se pudo generar el archivo Excel. Verifica los permisos de usuario.'
       );
     } finally {
-      setExporting(false);
+      setExportando(false);
     }
   };
 
-  // Línea actualmente seleccionada (para acceder a fecha_meta y metadatos)
-  const lineaActual = useMemo(
-    () => lineas.find((l) => l.id === Number(selectedLineaId)) || null,
-    [lineas, selectedLineaId]
-  );
+  // Línea de fondeo actualmente seleccionada en el estado
+  const lineaActual = useMemo(() => {
+    if (!lineaSeleccionada && !datos?.linea_id) return null;
+    const targetId = Number(lineaSeleccionada || datos?.linea_id);
+    return lineas.find((l) => l.id === targetId) || null;
+  }, [lineas, lineaSeleccionada, datos]);
 
-  // 4. Procesamiento de datos para el gráfico temporal (avance diario y acumulado)
-  const chartData = useMemo(() => {
-    if (!registros || registros.length === 0) return [];
-
-    // Ordenar cronológicamente de más antiguo a más reciente
-    const ordenados = [...registros].sort(
-      (a, b) => new Date(a.fecha).getTime() - new Date(b.fecha).getTime()
-    );
-
-    // Agrupar por fecha (YYYY-MM-DD) para consolidar avances del mismo día
-    const mapaDiario = new Map();
-    ordenados.forEach((reg) => {
-      const fechaObj = new Date(reg.fecha);
-      const claveDia = Number.isNaN(fechaObj.getTime())
-        ? 'Sin fecha'
-        : fechaObj.toISOString().split('T')[0];
-      const etiqueta = Number.isNaN(fechaObj.getTime())
-        ? 'Sin fecha'
-        : fechaObj.toLocaleDateString('es-CL', {
-            day: '2-digit',
-            month: 'short',
-          });
-
-      const actual = mapaDiario.get(claveDia) || {
-        fechaClave: claveDia,
-        fecha: etiqueta,
-        metrosDia: 0,
-        registrosDia: 0,
-      };
-      actual.metrosDia += Number(reg.metros_avanzados || 0);
-      actual.registrosDia += 1;
-      mapaDiario.set(claveDia, actual);
-    });
-
-    let acumulado = 0;
-    return Array.from(mapaDiario.values()).map((item) => {
-      acumulado += item.metrosDia;
-      return {
-        fecha: item.fecha,
-        metrosDia: Number(item.metrosDia.toFixed(2)),
-        metrosAcumulados: Number(acumulado.toFixed(2)),
-      };
-    });
-  }, [registros]);
-
-  // Configuración visual de estado de la línea
-  const getEstadoBadge = (estado) => {
-    const normalizado = (estado || '').toLowerCase();
-    if (normalizado === 'completada' || normalizado === 'sincronizado') {
-      return { text: estado, bg: '#dcfce7', color: '#15803d' };
+  // Formatear datos de la serie temporal para Recharts
+  const datosGrafico = useMemo(() => {
+    if (!datos?.serie_temporal || datos.serie_temporal.length === 0) {
+      return [];
     }
-    if (normalizado === 'pausada' || normalizado === 'pendiente') {
-      return { text: estado, bg: '#fef9c3', color: '#a16207' };
-    }
-    if (normalizado === 'conflicto') {
-      return { text: estado, bg: '#fee2e2', color: '#b91c1c' };
-    }
-    return { text: estado || 'activa', bg: '#dbeafe', color: '#1d4ed8' };
-  };
+    return datos.serie_temporal.map((punto) => ({
+      fechaOriginal: punto.fecha,
+      fecha: formatChartDate(punto.fecha),
+      metros_dia: Number(punto.metros_dia || 0),
+      metros_acumulados: Number(punto.metros_acumulados || 0),
+    }));
+  }, [datos]);
 
-  const porcentajeAvance = Math.min(
+  // Porcentaje acotado para la barra visual (0% a 100%)
+  const porcentajeVisual = Math.min(
     100,
-    Math.max(0, Number(resumen?.porcentaje_avance || 0))
+    Math.max(0, Number(datos?.porcentaje_avance || 0))
   );
 
   return (
-    <div style={styles.pageWrapper}>
-      {/* Cabecera Superior */}
+    <div style={styles.container}>
+      {/* Barra de Navegación y Cabecera Ejecutiva */}
       <header style={styles.header}>
-        <div style={styles.headerBrand}>
-          <div style={styles.logoBadge}>LF</div>
+        <div style={styles.brandContainer}>
+          <div style={styles.brandIcon}>⚓</div>
           <div>
-            <h1 style={styles.headerTitle}>Panel de Control — Líneas de Fondeo</h1>
+            <h1 style={styles.headerTitle}>Panel de Control Gerencial — Fondeo</h1>
             <p style={styles.headerSubtitle}>
-              Monitoreo de avance en terreno, proyecciones y trazabilidad operativa
+              Monitoreo ejecutivo de KPIs, proyecciones a 7 días y control de cronograma
             </p>
           </div>
         </div>
 
-        <div style={styles.headerControls}>
+        <div style={styles.controlsRow}>
           {/* Selector de Línea de Fondeo */}
-          <div style={styles.selectorGroup}>
+          <div style={styles.selectorWrapper}>
             <label htmlFor="selector-linea" style={styles.selectorLabel}>
-              Línea activa:
+              Línea:
             </label>
             <select
               id="selector-linea"
-              value={selectedLineaId ?? ''}
-              onChange={(e) => setSelectedLineaId(Number(e.target.value))}
-              disabled={loadingLineas || lineas.length === 0}
+              value={lineaSeleccionada ?? ''}
+              onChange={(e) => {
+                const val = e.target.value;
+                const nuevoId = val === '' ? '' : Number(val);
+                handleCambioLinea(nuevoId);
+              }}
+              disabled={cargandoLineas || cargando}
               style={styles.selectInput}
             >
               {lineas.length === 0 ? (
-                <option value="">Sin líneas registradas</option>
+                <option value="">Línea activa por defecto</option>
               ) : (
-                lineas.map((linea) => (
-                  <option key={linea.id} value={linea.id}>
-                    {linea.nombre} ({formatNumber(linea.metros_totales, 0)} m)
+                lineas.map((l) => (
+                  <option key={l.id} value={l.id}>
+                    {l.nombre} ({formatNumber(l.metros_totales, 0)} m)
                   </option>
                 ))
               )}
             </select>
           </div>
 
-          {/* Botón Actualizar */}
+          {/* Botón de Actualizar Datos bajo demanda */}
           <button
             type="button"
-            onClick={() => fetchDashboardData(selectedLineaId)}
-            disabled={loadingDatos || !selectedLineaId}
-            style={styles.secondaryButton}
-            title="Refrescar métricas y registros"
+            onClick={() => recargarMetricas(lineaSeleccionada)}
+            disabled={cargando}
+            style={styles.refreshButton}
+            title="Recargar métricas y proyecciones desde el backend"
           >
-            {loadingDatos ? 'Actualizando...' : 'Actualizar'}
+            <RefreshIcon size={15} spinning={cargando} />
+            <span>{cargando ? 'Actualizando...' : 'Actualizar datos'}</span>
           </button>
 
           {/* Botón Descargar Excel */}
           <button
             type="button"
-            onClick={handleDownloadExcel}
-            disabled={exporting || !selectedLineaId}
+            onClick={handleDescargarExcel}
+            disabled={exportando || (!lineaSeleccionada && !datos?.linea_id)}
             style={styles.excelButton}
+            title="Descargar informe oficial en Excel"
           >
-            {exporting ? 'Generando Excel...' : 'Descargar Excel (.xlsx)'}
+            <DownloadIcon size={15} />
+            <span>{exportando ? 'Exportando...' : 'Descargar Excel'}</span>
           </button>
 
           {/* Botón Cerrar Sesión */}
-          <button type="button" onClick={handleLogout} style={styles.logoutButton}>
-            Cerrar Sesión
+          <button
+            type="button"
+            onClick={handleLogout}
+            style={styles.logoutButton}
+            title="Cerrar sesión de usuario"
+          >
+            <LogOutIcon size={15} />
+            <span>Salir</span>
           </button>
         </div>
       </header>
 
-      <main style={styles.mainContent}>
-        {/* Aviso si está en modo demostración por backend desconectado */}
+      {/* Contenido Principal */}
+      <main style={styles.main}>
+        {/* Banner informativo de modo demostración (cuando el backend local está inactivo) */}
         {isDemoMode && (
           <div style={styles.demoBanner}>
             <div>
-              <strong>Modo Vista Previa Activo: </strong>
+              <strong>Modo de Demostración Activo: </strong>
               <span>
-                No se detectó conexión con FastAPI en <code>{getBaseUrl()}</code>. Mostrando
-                datos simulados para previsualización interactiva.
+                No se detectó un servidor backend en línea en el puerto 8000. Mostrando datos
+                de control simulados para inspección del tablero gerencial.
               </span>
             </div>
             <button
               type="button"
               onClick={() => window.location.reload()}
-              style={styles.demoRetryBtn}
+              style={styles.demoButton}
             >
-              Reconectar API
+              Reintentar Conexión API
             </button>
           </div>
         )}
 
-        {/* Banner de Error General */}
+        {/* Mensaje de Error */}
         {error && (
-          <div style={styles.errorBanner} role="alert">
-            <div>
+          <div style={styles.errorAlert} role="alert">
+            <AlertTriangleIcon size={20} color="#b91c1c" />
+            <div style={{ flex: 1 }}>
               <strong>Error de comunicación: </strong>
               <span>{error}</span>
             </div>
-            <div style={{ display: 'flex', gap: '8px' }}>
-              {selectedLineaId && (
-                <button
-                  type="button"
-                  onClick={() => fetchDashboardData(selectedLineaId)}
-                  style={styles.retryButton}
-                >
-                  Reintentar
-                </button>
-              )}
-              <button
-                type="button"
-                onClick={enableDemoFallback}
-                style={styles.retryButton}
-              >
-                Ver Demo
-              </button>
-            </div>
+            <button
+              type="button"
+              onClick={() => recargarMetricas(lineaSeleccionada)}
+              style={styles.retryBtn}
+            >
+              Reintentar
+            </button>
           </div>
         )}
 
         {/* Estado de Carga Inicial */}
-        {(loadingLineas || (loadingDatos && !resumen)) && (
-          <div style={styles.loadingCard}>
+        {(cargandoLineas || (cargando && !datos)) && (
+          <div style={styles.loadingContainer}>
             <div style={styles.spinner} />
             <p style={{ margin: 0, color: '#475569', fontWeight: 500 }}>
-              Sincronizando métricas e historial de avance...
+              Calculando proyecciones y métricas consolidadas...
             </p>
           </div>
         )}
 
-        {/* Contenido Principal cuando existe una línea seleccionada */}
-        {!loadingLineas && resumen && (
+        {/* Visualización de Datos */}
+        {datos && (
           <>
-            {/* Banner de Alerta de Atraso */}
-            {resumen.alerta_atraso && (
-              <div style={styles.delayAlertBanner} role="alert">
-                <div style={styles.delayAlertIcon}>!</div>
-                <div style={{ flex: 1 }}>
-                  <h2 style={styles.delayAlertTitle}>
-                    Alerta de Desviación en el Cronograma — {resumen.linea_nombre}
-                  </h2>
-                  <p style={styles.delayAlertText}>
-                    {resumen.fecha_estimada_termino
-                      ? `Al ritmo actual de los últimos 7 días (${formatNumber(
-                          resumen.promedio_diario_ultimos_7_dias
-                        )} m/día), la fecha estimada de término (${formatDateShort(
-                          resumen.fecha_estimada_termino
-                        )}) supera la fecha meta planificada${
-                          lineaActual?.fecha_meta
-                            ? ` (${formatDateShort(lineaActual.fecha_meta)})`
-                            : ''
-                        }.`
-                      : 'No se registran avances en los últimos 7 días y existen metros pendientes para cumplir la fecha meta planificada.'}
-                  </p>
+            {/* ======================================================== */}
+            {/* BLOQUE DE ALERTA POR DESVIACIÓN DE CRONOGRAMA (CRÍTICO) */}
+            {/* ======================================================== */}
+            {datos.alerta_desviacion ? (
+              <section
+                style={
+                  datos.severidad_desviacion === 'ALTA'
+                    ? styles.alertBannerHigh
+                    : styles.alertBannerMedium
+                }
+                role="alert"
+                aria-live="polite"
+              >
+                <div style={styles.alertIconCircle}>
+                  <AlertTriangleIcon size={24} color="#ffffff" />
                 </div>
-              </div>
+                <div style={{ flex: 1 }}>
+                  <div style={styles.alertHeaderRow}>
+                    <h2 style={styles.alertMainHeading}>
+                      Alerta operacional: El avance de la línea presenta un desfase
+                      significativo respecto a la fecha meta estimada.
+                    </h2>
+                    <span
+                      style={{
+                        ...styles.severityBadge,
+                        backgroundColor:
+                          datos.severidad_desviacion === 'ALTA' ? '#991b1b' : '#b45309',
+                      }}
+                    >
+                      Severidad {datos.severidad_desviacion || 'MEDIA'}
+                    </span>
+                  </div>
+
+                  {/* Detalle provisto por el backend */}
+                  <p style={styles.alertMessage}>
+                    {datos.mensaje_desviacion ||
+                      'El avance acumulado es inferior al 80% de la meta lineal teórica planificada a la fecha actual.'}
+                  </p>
+
+                  {/* Cifras de la desviación */}
+                  <div style={styles.alertMetricsGrid}>
+                    <div style={styles.alertMetricItem}>
+                      <span style={styles.alertMetricLabel}>Desfase Porcentual</span>
+                      <strong style={styles.alertMetricVal}>
+                        {formatNumber(datos.desfase_porcentual, 1)}%
+                      </strong>
+                    </div>
+
+                    <div style={styles.alertMetricItem}>
+                      <span style={styles.alertMetricLabel}>Meta Esperada a la Fecha</span>
+                      <strong style={styles.alertMetricVal}>
+                        {datos.meta_lineal_esperada !== null &&
+                        datos.meta_lineal_esperada !== undefined
+                          ? `${formatNumber(datos.meta_lineal_esperada, 1)} m`
+                          : 'No estimada'}
+                      </strong>
+                    </div>
+
+                    <div style={styles.alertMetricItem}>
+                      <span style={styles.alertMetricLabel}>Avance Real Instalado</span>
+                      <strong style={styles.alertMetricVal}>
+                        {formatNumber(datos.metros_acumulados, 1)} m
+                      </strong>
+                    </div>
+
+                    <div style={styles.alertMetricItem}>
+                      <span style={styles.alertMetricLabel}>Fecha Meta Pactada</span>
+                      <strong style={styles.alertMetricVal}>
+                        {lineaActual?.fecha_meta
+                          ? formatDateShort(lineaActual.fecha_meta)
+                          : 'No pactada'}
+                      </strong>
+                    </div>
+                  </div>
+                </div>
+              </section>
+            ) : (
+              /* Banner positivo cuando el cronograma va en orden */
+              <section style={styles.onTrackBanner}>
+                <CheckCircleIcon size={22} color="#15803d" />
+                <div style={{ flex: 1 }}>
+                  <span style={styles.onTrackText}>
+                    <strong>Cronograma dentro de los márgenes previstos: </strong>
+                    La línea {datos.nombre_linea} no presenta desviaciones críticas respecto a
+                    la meta lineal planificada.
+                  </span>
+                </div>
+                {lineaActual?.fecha_meta && (
+                  <span style={styles.onTrackMeta}>
+                    Meta: {formatDateShort(lineaActual.fecha_meta)}
+                  </span>
+                )}
+              </section>
             )}
 
-            {/* Grilla de 4 Tarjetas KPI */}
+            {/* ======================================================== */}
+            {/* TARJETAS DE KPIS GERENCIALES (MÉTRICAS CLAVE)            */}
+            {/* ======================================================== */}
             <section style={styles.kpiGrid}>
-              {/* Tarjeta 1: % de Avance General */}
+              {/* KPI 1: Avance General (%) */}
               <KpiCard
                 title="Avance General"
-                value={`${formatNumber(resumen.porcentaje_avance)}%`}
-                subtitle={`Línea: ${resumen.linea_nombre}`}
-                badge={getEstadoBadge(resumen.estado)}
+                value={`${formatNumber(datos.porcentaje_avance, 1)}%`}
+                subtitle={`Línea: ${datos.nombre_linea}`}
+                badge={{
+                  text: datos.estado_linea || 'Activa',
+                  bg: datos.estado_linea === 'completada' ? '#dcfce7' : '#dbeafe',
+                  color: datos.estado_linea === 'completada' ? '#15803d' : '#1d4ed8',
+                }}
                 accentColor="#2563eb"
               >
-                <div style={styles.progressBarTrack}>
+                <div style={styles.progressTrack}>
                   <div
                     style={{
-                      ...styles.progressBarFill,
-                      width: `${porcentajeAvance}%`,
+                      ...styles.progressFill,
+                      width: `${porcentajeVisual}%`,
                       backgroundColor:
-                        porcentajeAvance >= 100
+                        porcentajeVisual >= 100
                           ? '#16a34a'
-                          : resumen.alerta_atraso
+                          : datos.alerta_desviacion
                           ? '#dc2626'
                           : '#2563eb',
                     }}
@@ -695,128 +745,164 @@ function Dashboard({ onLogout }) {
                 </div>
               </KpiCard>
 
-              {/* Tarjeta 2: Metros Acumulados vs Totales */}
+              {/* KPI 2: Metros Instalados (Acumulados vs Totales) */}
               <KpiCard
-                title="Progreso Lineal (Metros)"
-                value={`${formatNumber(resumen.metros_acumulados)} m`}
-                subtitle={`de ${formatNumber(resumen.metros_totales)} m totales`}
+                title="Metros Instalados"
+                value={`${formatNumber(datos.metros_acumulados, 1)} m`}
+                subtitle={`de ${formatNumber(datos.metros_totales, 1)} m totales`}
                 badge={{
-                  text: `Restan ${formatNumber(resumen.metros_restantes)} m`,
+                  text: `${formatNumber(porcentajeVisual, 1)}% completado`,
                   bg: '#f1f5f9',
                   color: '#334155',
                 }}
-                accentColor="#0ea5e9"
-              />
+                accentColor="#0284c7"
+              >
+                <div style={styles.miniDetailRow}>
+                  <span>Fondeo acumulado efectivo</span>
+                  <strong>{formatNumber(datos.metros_acumulados, 1)} m</strong>
+                </div>
+              </KpiCard>
 
-              {/* Tarjeta 3: Ritmo de Trabajo (Promedio 7 días) */}
+              {/* KPI 3: Metros Restantes */}
               <KpiCard
-                title="Ritmo de Trabajo (Últimos 7 días)"
-                value={`${formatNumber(resumen.promedio_diario_ultimos_7_dias)} m/día`}
-                subtitle="Velocidad media de instalación reciente"
+                title="Metros Restantes"
+                value={`${formatNumber(datos.metros_restantes, 1)} m`}
+                subtitle="Longitud pendiente por fondear en faena"
                 badge={{
                   text:
-                    resumen.promedio_diario_ultimos_7_dias > 0
-                      ? 'En movimiento'
-                      : 'Sin avance 7d',
-                  bg:
-                    resumen.promedio_diario_ultimos_7_dias > 0
-                      ? '#ecfdf5'
-                      : '#fef2f2',
-                  color:
-                    resumen.promedio_diario_ultimos_7_dias > 0
-                      ? '#047857'
-                      : '#b91c1c',
+                    datos.metros_restantes <= 0 ? 'Meta lograda' : 'Pendiente',
+                  bg: datos.metros_restantes <= 0 ? '#dcfce7' : '#fef3c7',
+                  color: datos.metros_restantes <= 0 ? '#166534' : '#92400e',
+                }}
+                accentColor="#f59e0b"
+              >
+                <div style={styles.miniDetailRow}>
+                  <span>Por fondear</span>
+                  <strong>{formatNumber(datos.metros_restantes, 1)} m</strong>
+                </div>
+              </KpiCard>
+
+              {/* KPI 4: Ritmo de Faena (Promedio 7 días) */}
+              <KpiCard
+                title="Ritmo de Faena"
+                value={`${formatNumber(datos.promedio_diario_7d, 1)} m/día`}
+                subtitle="Promedio diario de los últimos 7 días con maniobra"
+                badge={{
+                  text:
+                    datos.promedio_diario_7d > 0 ? 'Cuadrilla activa' : 'Sin faena reciente',
+                  bg: datos.promedio_diario_7d > 0 ? '#ecfdf5' : '#fef2f2',
+                  color: datos.promedio_diario_7d > 0 ? '#047857' : '#b91c1c',
                 }}
                 accentColor="#8b5cf6"
-              />
+              >
+                <div style={styles.miniDetailRow}>
+                  <span>Velocidad operativa</span>
+                  <strong>{formatNumber(datos.promedio_diario_7d, 1)} m/jornada</strong>
+                </div>
+              </KpiCard>
 
-              {/* Tarjeta 4: Proyección de Término */}
+              {/* KPI 5: Fecha Estimada de Término */}
               <KpiCard
-                title="Proyección de Término"
+                title="Fecha Estimada de Término"
                 value={
-                  resumen.metros_restantes <= 0
+                  datos.metros_restantes <= 0
                     ? 'Completada'
-                    : resumen.dias_estimados_termino !== null
-                    ? `${formatNumber(resumen.dias_estimados_termino, 1)} días`
-                    : 'Indeterminado'
+                    : datos.fecha_estimada_termino
+                    ? formatDateShort(datos.fecha_estimada_termino)
+                    : 'Sin proyección'
                 }
                 subtitle={
-                  resumen.fecha_estimada_termino
-                    ? `Término estimado: ${formatDateShort(resumen.fecha_estimada_termino)}`
-                    : 'Se requiere avance en los últimos 7 días para proyectar'
+                  datos.metros_restantes <= 0
+                    ? 'Faena de fondeo 100% concluida'
+                    : datos.dias_estimados_termino !== null &&
+                      datos.dias_estimados_termino !== undefined
+                    ? `Días proyectados: ~${datos.dias_estimados_termino} días a ritmo actual`
+                    : 'Requiere faenas recientes para calcular proyección'
                 }
                 badge={
-                  resumen.alerta_atraso
-                    ? { text: 'En atraso', bg: '#fee2e2', color: '#b91c1c' }
+                  datos.alerta_desviacion
+                    ? { text: 'Desfase crítico', bg: '#fee2e2', color: '#b91c1c' }
                     : { text: 'En plazo', bg: '#dcfce7', color: '#15803d' }
                 }
-                accentColor={resumen.alerta_atraso ? '#dc2626' : '#10b981'}
+                accentColor={datos.alerta_desviacion ? '#dc2626' : '#10b981'}
               >
-                {lineaActual?.fecha_meta && (
-                  <div style={styles.metaDateNote}>
-                    Fecha meta contractual: {formatDateShort(lineaActual.fecha_meta)}
-                  </div>
-                )}
+                <div style={styles.miniDetailRow}>
+                  <span>Fecha meta pactada</span>
+                  <strong>
+                    {lineaActual?.fecha_meta
+                      ? formatDateShort(lineaActual.fecha_meta)
+                      : 'No definida'}
+                  </strong>
+                </div>
               </KpiCard>
             </section>
 
-            {/* Sección de Gráfico de Evolución con Recharts */}
-            <section style={styles.cardSection}>
-              <div style={styles.sectionHeader}>
+            {/* ======================================================== */}
+            {/* VISUALIZACIÓN GRÁFICA CON RECHARTS                       */}
+            {/* ======================================================== */}
+            <section style={styles.chartCard}>
+              <div style={styles.chartHeader}>
                 <div>
-                  <h2 style={styles.sectionTitle}>
-                    Evolución del Avance Diario y Acumulado
+                  <h2 style={styles.chartTitle}>
+                    Curva de Avance Acumulado y Producción Diaria
                   </h2>
-                  <p style={styles.sectionDescription}>
-                    Curva de crecimiento acumulado (m) versus producción diaria registrada en
-                    terreno
+                  <p style={styles.chartSubtitle}>
+                    Evolución temporal del fondeo en terreno: metros acumulados versus
+                    rendimiento de cada jornada (m)
                   </p>
                 </div>
 
-                {/* Selector de tipo de visualización */}
+                {/* Selector interactivo de vista de gráfico */}
                 <div style={styles.chartToggleGroup}>
                   {[
-                    { id: 'combinado', label: 'Combinado' },
+                    { id: 'combinado', label: 'Combinado (Área + Barras)' },
+                    { id: 'lineas', label: 'Línea de Tendencia' },
                     { id: 'area', label: 'Área Acumulada' },
                     { id: 'barras', label: 'Barras Diarias' },
-                  ].map((tab) => (
+                  ].map((btn) => (
                     <button
-                      key={tab.id}
+                      key={btn.id}
                       type="button"
-                      onClick={() => setChartType(tab.id)}
+                      onClick={() => setTipoGrafico(btn.id)}
                       style={
-                        chartType === tab.id
-                          ? styles.chartToggleActive
+                        tipoGrafico === btn.id
+                          ? styles.chartToggleBtnActive
                           : styles.chartToggleBtn
                       }
                     >
-                      {tab.label}
+                      {btn.label}
                     </button>
                   ))}
                 </div>
               </div>
 
-              {chartData.length === 0 ? (
-                <div style={styles.emptyState}>
-                  No existen registros de avance para graficar en esta línea de fondeo.
+              {datosGrafico.length === 0 ? (
+                <div style={styles.emptyChart}>
+                  <p style={{ margin: 0, fontWeight: 600, color: '#475569' }}>
+                    No se registran faenas de fondeo para graficar en esta línea.
+                  </p>
+                  <span style={{ fontSize: '13px', color: '#94a3b8' }}>
+                    Los registros sincronizados desde la app móvil offline se reflejarán
+                    aquí automáticamente.
+                  </span>
                 </div>
               ) : (
-                <div style={{ width: '100%', height: 340 }}>
+                <div style={{ width: '100%', height: 360 }}>
                   <ResponsiveContainer width="100%" height="100%">
-                    {chartType === 'combinado' ? (
+                    {tipoGrafico === 'combinado' ? (
                       <ComposedChart
-                        data={chartData}
+                        data={datosGrafico}
                         margin={{ top: 15, right: 25, left: 10, bottom: 5 }}
                       >
                         <defs>
                           <linearGradient
-                            id="colorAcumulado"
+                            id="colorAcumuladoGradient"
                             x1="0"
                             y1="0"
                             x2="0"
                             y2="1"
                           >
-                            <stop offset="5%" stopColor="#2563eb" stopOpacity={0.28} />
+                            <stop offset="5%" stopColor="#2563eb" stopOpacity={0.35} />
                             <stop offset="95%" stopColor="#2563eb" stopOpacity={0.02} />
                           </linearGradient>
                         </defs>
@@ -833,38 +919,78 @@ function Dashboard({ onLogout }) {
                           tickFormatter={(val) => `${val} m`}
                         />
                         <Tooltip content={<CustomChartTooltip />} />
-                        <Legend wrapperStyle={{ paddingTop: '10px' }} />
+                        <Legend
+                          wrapperStyle={{ paddingTop: '12px' }}
+                          formatter={(value) => (
+                            <span style={{ color: '#334155', fontWeight: 600 }}>
+                              {value}
+                            </span>
+                          )}
+                        />
                         <Area
                           type="monotone"
-                          dataKey="metrosAcumulados"
-                          name="Avance Acumulado (m)"
+                          dataKey="metros_acumulados"
+                          name="Metros Acumulados"
                           stroke="#2563eb"
                           strokeWidth={2.5}
-                          fill="url(#colorAcumulado)"
+                          fill="url(#colorAcumuladoGradient)"
                         />
                         <Bar
-                          dataKey="metrosDia"
-                          name="Avance Diario (m)"
+                          dataKey="metros_dia"
+                          name="Metros de la Jornada"
                           fill="#0ea5e9"
                           radius={[6, 6, 0, 0]}
-                          maxBarSize={44}
+                          maxBarSize={48}
                         />
                       </ComposedChart>
-                    ) : chartType === 'area' ? (
+                    ) : tipoGrafico === 'lineas' ? (
+                      <LineChart
+                        data={datosGrafico}
+                        margin={{ top: 15, right: 25, left: 10, bottom: 5 }}
+                      >
+                        <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                        <XAxis dataKey="fecha" stroke="#64748b" fontSize={12} />
+                        <YAxis
+                          stroke="#64748b"
+                          fontSize={12}
+                          tickFormatter={(val) => `${val} m`}
+                        />
+                        <Tooltip content={<CustomChartTooltip />} />
+                        <Legend wrapperStyle={{ paddingTop: '12px' }} />
+                        <Line
+                          type="monotone"
+                          dataKey="metros_acumulados"
+                          name="Metros Acumulados"
+                          stroke="#2563eb"
+                          strokeWidth={3}
+                          dot={{ r: 4, fill: '#2563eb' }}
+                          activeDot={{ r: 6 }}
+                        />
+                        <Line
+                          type="monotone"
+                          dataKey="metros_dia"
+                          name="Metros Jornada"
+                          stroke="#10b981"
+                          strokeWidth={2}
+                          strokeDasharray="4 4"
+                          dot={{ r: 3, fill: '#10b981' }}
+                        />
+                      </LineChart>
+                    ) : tipoGrafico === 'area' ? (
                       <AreaChart
-                        data={chartData}
+                        data={datosGrafico}
                         margin={{ top: 15, right: 25, left: 10, bottom: 5 }}
                       >
                         <defs>
                           <linearGradient
-                            id="colorAreaOnly"
+                            id="colorAreaSolo"
                             x1="0"
                             y1="0"
                             x2="0"
                             y2="1"
                           >
-                            <stop offset="5%" stopColor="#2563eb" stopOpacity={0.35} />
-                            <stop offset="95%" stopColor="#2563eb" stopOpacity={0.03} />
+                            <stop offset="5%" stopColor="#2563eb" stopOpacity={0.4} />
+                            <stop offset="95%" stopColor="#2563eb" stopOpacity={0.05} />
                           </linearGradient>
                         </defs>
                         <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
@@ -875,19 +1001,19 @@ function Dashboard({ onLogout }) {
                           tickFormatter={(val) => `${val} m`}
                         />
                         <Tooltip content={<CustomChartTooltip />} />
-                        <Legend wrapperStyle={{ paddingTop: '10px' }} />
+                        <Legend wrapperStyle={{ paddingTop: '12px' }} />
                         <Area
                           type="monotone"
-                          dataKey="metrosAcumulados"
-                          name="Avance Acumulado (m)"
+                          dataKey="metros_acumulados"
+                          name="Metros Acumulados"
                           stroke="#2563eb"
                           strokeWidth={3}
-                          fill="url(#colorAreaOnly)"
+                          fill="url(#colorAreaSolo)"
                         />
                       </AreaChart>
                     ) : (
-                      <BarChart
-                        data={chartData}
+                      <ComposedChart
+                        data={datosGrafico}
                         margin={{ top: 15, right: 25, left: 10, bottom: 5 }}
                       >
                         <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
@@ -898,75 +1024,84 @@ function Dashboard({ onLogout }) {
                           tickFormatter={(val) => `${val} m`}
                         />
                         <Tooltip content={<CustomChartTooltip />} />
-                        <Legend wrapperStyle={{ paddingTop: '10px' }} />
+                        <Legend wrapperStyle={{ paddingTop: '12px' }} />
                         <Bar
-                          dataKey="metrosDia"
-                          name="Avance Diario (m)"
+                          dataKey="metros_dia"
+                          name="Producción Diaria (m)"
                           fill="#0ea5e9"
                           radius={[6, 6, 0, 0]}
-                          maxBarSize={52}
+                          maxBarSize={56}
                         />
-                      </BarChart>
+                      </ComposedChart>
                     )}
                   </ResponsiveContainer>
                 </div>
               )}
             </section>
 
-            {/* Tabla Detallada de Registros de Avance */}
-            <section style={styles.cardSection}>
-              <div style={styles.sectionHeader}>
+            {/* ======================================================== */}
+            {/* SERIE TEMPORAL DETALLADA (TABLA DE CONTROL EJECUTIVO)    */}
+            {/* ======================================================== */}
+            <section style={styles.chartCard}>
+              <div style={styles.chartHeader}>
                 <div>
-                  <h2 style={styles.sectionTitle}>
-                    Historial Detallado de Registros en Terreno
-                  </h2>
-                  <p style={styles.sectionDescription}>
-                    Últimos reportes sincronizados con coordenadas GPS y estado de validación
+                  <h2 style={styles.chartTitle}>Bitácora Consolidada de Jornadas</h2>
+                  <p style={styles.chartSubtitle}>
+                    Detalle diario procesado para auditoría y trazabilidad del avance de obra
                   </p>
                 </div>
-                <span style={styles.recordCountBadge}>
-                  {registros.length} {registros.length === 1 ? 'registro' : 'registros'}
+                <span style={styles.countBadge}>
+                  {datosGrafico.length} {datosGrafico.length === 1 ? 'jornada' : 'jornadas'}
                 </span>
               </div>
 
-              {registros.length === 0 ? (
-                <div style={styles.emptyState}>
-                  No se han ingresado registros de avance para esta línea todavía.
+              {datosGrafico.length === 0 ? (
+                <div style={styles.emptyChart}>
+                  <span>Sin registros consolidados en esta línea de fondeo.</span>
                 </div>
               ) : (
                 <div style={styles.tableResponsive}>
                   <table style={styles.table}>
                     <thead>
                       <tr>
-                        <th style={styles.th}>Fecha Registro</th>
+                        <th style={styles.th}>Fecha de Maniobra</th>
                         <th style={{ ...styles.th, textAlign: 'right' }}>
-                          Metros Avanzados
+                          Metros de la Jornada
                         </th>
-                        <th style={styles.th}>Coordenadas (Lat / Lon)</th>
-                        <th style={{ ...styles.th, textAlign: 'center' }}>Estado</th>
-                        <th style={styles.th}>Observaciones</th>
+                        <th style={{ ...styles.th, textAlign: 'right' }}>
+                          Avance Acumulado
+                        </th>
+                        <th style={{ ...styles.th, textAlign: 'right' }}>
+                          % de la Meta Lineal
+                        </th>
                       </tr>
                     </thead>
                     <tbody>
-                      {registros.map((reg) => {
-                        const badge = getEstadoBadge(reg.estado);
-                        const tieneCoordenadas =
-                          reg.latitud !== null &&
-                          reg.latitud !== undefined &&
-                          reg.longitud !== null &&
-                          reg.longitud !== undefined;
-
+                      {datosGrafico.map((punto, idx) => {
+                        const porcentajePunto =
+                          datos.metros_totales > 0
+                            ? (punto.metros_acumulados / datos.metros_totales) * 100
+                            : 0;
                         return (
-                          <tr key={reg.id} style={styles.tr}>
+                          <tr key={punto.fechaOriginal || idx} style={styles.tr}>
                             <td style={styles.td}>
                               <div style={{ fontWeight: 600, color: '#0f172a' }}>
-                                {formatDateTime(reg.fecha)}
+                                {punto.fechaOriginal}
                               </div>
-                              <div style={{ fontSize: '11px', color: '#94a3b8' }}>
-                                UUID: {String(reg.id).slice(0, 8)}...
+                              <div style={{ fontSize: '11px', color: '#64748b' }}>
+                                Maniobra N° {idx + 1}
                               </div>
                             </td>
-
+                            <td
+                              style={{
+                                ...styles.td,
+                                textAlign: 'right',
+                                fontWeight: 700,
+                                color: '#0369a1',
+                              }}
+                            >
+                              +{formatNumber(punto.metros_dia, 1)} m
+                            </td>
                             <td
                               style={{
                                 ...styles.td,
@@ -975,40 +1110,12 @@ function Dashboard({ onLogout }) {
                                 color: '#1e3a8a',
                               }}
                             >
-                              +{formatNumber(reg.metros_avanzados)} m
+                              {formatNumber(punto.metros_acumulados, 1)} m
                             </td>
-
-                            <td style={styles.td}>
-                              {tieneCoordenadas ? (
-                                <span style={styles.coordsCode}>
-                                  {Number(reg.latitud).toFixed(5)},{' '}
-                                  {Number(reg.longitud).toFixed(5)}
-                                </span>
-                              ) : (
-                                <span style={{ color: '#94a3b8', fontSize: '13px' }}>
-                                  Sin coordenadas GPS
-                                </span>
-                              )}
-                            </td>
-
-                            <td style={{ ...styles.td, textAlign: 'center' }}>
-                              <span
-                                style={{
-                                  ...styles.badge,
-                                  backgroundColor: badge.bg,
-                                  color: badge.color,
-                                }}
-                              >
-                                {badge.text}
+                            <td style={{ ...styles.td, textAlign: 'right' }}>
+                              <span style={styles.progressPercentPill}>
+                                {formatNumber(porcentajePunto, 1)}%
                               </span>
-                            </td>
-
-                            <td style={styles.td}>
-                              {reg.observacion ? (
-                                <span style={{ color: '#334155' }}>{reg.observacion}</span>
-                              ) : (
-                                <span style={{ color: '#94a3b8' }}>Sin observaciones</span>
-                              )}
                             </td>
                           </tr>
                         );
@@ -1025,15 +1132,15 @@ function Dashboard({ onLogout }) {
   );
 }
 
-// --- Estilos modernos tipo SaaS ---
+// --- Estilos CSS en JS optimizados para Escritorio y Tablets ---
 const styles = {
-  pageWrapper: {
+  container: {
     minHeight: '100vh',
     backgroundColor: '#f8fafc',
     color: '#0f172a',
     fontFamily:
-      "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
-    paddingBottom: '48px',
+      "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif",
+    paddingBottom: '50px',
   },
   header: {
     backgroundColor: '#ffffff',
@@ -1047,14 +1154,14 @@ const styles = {
     position: 'sticky',
     top: 0,
     zIndex: 20,
-    boxShadow: '0 1px 3px rgba(15, 23, 42, 0.04)',
+    boxShadow: '0 1px 3px rgba(15, 23, 42, 0.05)',
   },
-  headerBrand: {
+  brandContainer: {
     display: 'flex',
     alignItems: 'center',
-    gap: '14px',
+    gap: '12px',
   },
-  logoBadge: {
+  brandIcon: {
     width: '42px',
     height: '42px',
     borderRadius: '10px',
@@ -1063,28 +1170,28 @@ const styles = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    fontWeight: 800,
-    fontSize: '16px',
-    letterSpacing: '0.5px',
+    fontSize: '22px',
+    boxShadow: '0 2px 4px rgba(37, 99, 235, 0.2)',
   },
   headerTitle: {
     margin: 0,
     fontSize: '20px',
     fontWeight: 700,
     color: '#0f172a',
+    letterSpacing: '-0.3px',
   },
   headerSubtitle: {
-    margin: '2px 0 0 0',
+    margin: '3px 0 0 0',
     fontSize: '13px',
     color: '#64748b',
   },
-  headerControls: {
+  controlsRow: {
     display: 'flex',
     flexWrap: 'wrap',
     alignItems: 'center',
     gap: '10px',
   },
-  selectorGroup: {
+  selectorWrapper: {
     display: 'flex',
     alignItems: 'center',
     gap: '8px',
@@ -1101,24 +1208,31 @@ const styles = {
   selectInput: {
     border: 'none',
     backgroundColor: 'transparent',
-    fontSize: '14px',
+    fontSize: '13.5px',
     fontWeight: 600,
     color: '#0f172a',
     outline: 'none',
     cursor: 'pointer',
   },
-  secondaryButton: {
-    padding: '9px 14px',
+  refreshButton: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '7px',
+    padding: '8px 14px',
     borderRadius: '8px',
     border: '1px solid #cbd5e1',
     backgroundColor: '#ffffff',
-    color: '#334155',
+    color: '#1e293b',
     fontSize: '13px',
     fontWeight: 600,
     cursor: 'pointer',
+    transition: 'all 0.15s ease',
   },
   excelButton: {
-    padding: '9px 16px',
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '7px',
+    padding: '8px 16px',
     borderRadius: '8px',
     border: 'none',
     backgroundColor: '#059669',
@@ -1126,10 +1240,13 @@ const styles = {
     fontSize: '13px',
     fontWeight: 600,
     cursor: 'pointer',
-    boxShadow: '0 1px 2px rgba(5, 150, 105, 0.2)',
+    boxShadow: '0 1px 2px rgba(5, 150, 105, 0.25)',
   },
   logoutButton: {
-    padding: '9px 14px',
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '6px',
+    padding: '8px 13px',
     borderRadius: '8px',
     border: '1px solid #fecaca',
     backgroundColor: '#fef2f2',
@@ -1138,13 +1255,13 @@ const styles = {
     fontWeight: 600,
     cursor: 'pointer',
   },
-  mainContent: {
-    maxWidth: '1280px',
+  main: {
+    maxWidth: '1340px',
     margin: '24px auto 0',
     padding: '0 24px',
     display: 'flex',
     flexDirection: 'column',
-    gap: '24px',
+    gap: '22px',
   },
   demoBanner: {
     backgroundColor: '#eff6ff',
@@ -1159,7 +1276,7 @@ const styles = {
     gap: '12px',
     fontSize: '13.5px',
   },
-  demoRetryBtn: {
+  demoButton: {
     padding: '6px 12px',
     borderRadius: '6px',
     border: '1px solid #93c5fd',
@@ -1169,19 +1286,18 @@ const styles = {
     fontSize: '12.5px',
     cursor: 'pointer',
   },
-  errorBanner: {
+  errorAlert: {
     backgroundColor: '#fef2f2',
     border: '1px solid #fecaca',
     color: '#991b1b',
     padding: '14px 18px',
     borderRadius: '10px',
     display: 'flex',
-    justifyContent: 'space-between',
     alignItems: 'center',
     gap: '12px',
     fontSize: '14px',
   },
-  retryButton: {
+  retryBtn: {
     padding: '6px 12px',
     borderRadius: '6px',
     border: '1px solid #f87171',
@@ -1190,7 +1306,7 @@ const styles = {
     fontWeight: 600,
     cursor: 'pointer',
   },
-  loadingCard: {
+  loadingContainer: {
     backgroundColor: '#ffffff',
     border: '1px solid #e2e8f0',
     borderRadius: '12px',
@@ -1207,47 +1323,125 @@ const styles = {
     borderRadius: '50%',
     border: '3px solid #e2e8f0',
     borderTopColor: '#2563eb',
+    animation: 'spin 0.8s linear infinite',
   },
-  delayAlertBanner: {
+  // Banners de Alerta por Desviación de Cronograma
+  alertBannerHigh: {
     backgroundColor: '#fff1f2',
     border: '1px solid #fda4af',
-    borderLeft: '6px solid #e11d48',
+    borderLeft: '6px solid #dc2626',
     borderRadius: '12px',
-    padding: '16px 20px',
+    padding: '20px 22px',
     display: 'flex',
     alignItems: 'flex-start',
     gap: '16px',
-    boxShadow: '0 2px 6px rgba(225, 29, 72, 0.08)',
+    boxShadow: '0 3px 8px rgba(220, 38, 38, 0.1)',
   },
-  delayAlertIcon: {
-    width: '32px',
-    height: '32px',
-    borderRadius: '50%',
-    backgroundColor: '#e11d48',
-    color: '#ffffff',
-    fontWeight: 800,
-    fontSize: '18px',
+  alertBannerMedium: {
+    backgroundColor: '#fffbeb',
+    border: '1px solid #fde68a',
+    borderLeft: '6px solid #d97706',
+    borderRadius: '12px',
+    padding: '20px 22px',
+    display: 'flex',
+    alignItems: 'flex-start',
+    gap: '16px',
+    boxShadow: '0 3px 8px rgba(217, 119, 6, 0.1)',
+  },
+  alertIconCircle: {
+    width: '40px',
+    height: '40px',
+    borderRadius: '10px',
+    backgroundColor: '#dc2626',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
     flexShrink: 0,
   },
-  delayAlertTitle: {
-    margin: '0 0 4px 0',
-    fontSize: '15px',
+  alertHeaderRow: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: '10px',
+    marginBottom: '6px',
+  },
+  alertMainHeading: {
+    margin: 0,
+    fontSize: '16px',
     fontWeight: 700,
     color: '#881337',
+    lineHeight: 1.4,
   },
-  delayAlertText: {
-    margin: 0,
-    fontSize: '13.5px',
+  severityBadge: {
+    color: '#ffffff',
+    fontSize: '11px',
+    fontWeight: 700,
+    padding: '3px 10px',
+    borderRadius: '999px',
+    letterSpacing: '0.5px',
+    textTransform: 'uppercase',
+  },
+  alertMessage: {
+    margin: '4px 0 14px 0',
+    fontSize: '14px',
     color: '#9f1239',
     lineHeight: 1.5,
   },
+  alertMetricsGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+    gap: '10px',
+    backgroundColor: '#ffffff',
+    padding: '12px 16px',
+    borderRadius: '8px',
+    border: '1px solid #fecdd3',
+  },
+  alertMetricItem: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '2px',
+  },
+  alertMetricLabel: {
+    fontSize: '11px',
+    color: '#64748b',
+    textTransform: 'uppercase',
+    fontWeight: 600,
+  },
+  alertMetricVal: {
+    fontSize: '15px',
+    fontWeight: 700,
+    color: '#0f172a',
+  },
+  // Banner de cronograma en orden
+  onTrackBanner: {
+    backgroundColor: '#f0fdf4',
+    border: '1px solid #bbf7d0',
+    borderLeft: '5px solid #16a34a',
+    borderRadius: '10px',
+    padding: '12px 18px',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '12px',
+    fontSize: '13.5px',
+    color: '#166534',
+  },
+  onTrackText: {
+    lineHeight: 1.4,
+  },
+  onTrackMeta: {
+    fontSize: '12px',
+    fontWeight: 600,
+    backgroundColor: '#dcfce7',
+    padding: '4px 10px',
+    borderRadius: '6px',
+    color: '#15803d',
+  },
+  // Grilla de KPIs
   kpiGrid: {
     display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
-    gap: '18px',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
+    gap: '16px',
   },
   kpiCard: {
     backgroundColor: '#ffffff',
@@ -1256,7 +1450,10 @@ const styles = {
     padding: '20px',
     position: 'relative',
     overflow: 'hidden',
-    boxShadow: '0 1px 3px rgba(15, 23, 42, 0.03)',
+    boxShadow: '0 1px 3px rgba(15, 23, 42, 0.04)',
+    display: 'flex',
+    flexDirection: 'column',
+    justifyContent: 'space-between',
   },
   kpiAccentBar: {
     position: 'absolute',
@@ -1270,41 +1467,43 @@ const styles = {
     justifyContent: 'space-between',
     alignItems: 'center',
     gap: '8px',
-    marginBottom: '10px',
+    marginBottom: '8px',
   },
   kpiTitle: {
-    fontSize: '13px',
-    fontWeight: 600,
+    fontSize: '12.5px',
+    fontWeight: 700,
     color: '#64748b',
     textTransform: 'uppercase',
     letterSpacing: '0.4px',
+  },
+  badge: {
+    display: 'inline-block',
+    padding: '3px 9px',
+    borderRadius: '999px',
+    fontSize: '11px',
+    fontWeight: 700,
+    textTransform: 'capitalize',
   },
   kpiValue: {
     fontSize: '28px',
     fontWeight: 800,
     color: '#0f172a',
+    letterSpacing: '-0.5px',
     marginBottom: '4px',
   },
   kpiSubtitle: {
-    fontSize: '13px',
+    fontSize: '12.5px',
     color: '#64748b',
+    lineHeight: 1.4,
   },
-  badge: {
-    display: 'inline-block',
-    padding: '3px 10px',
-    borderRadius: '999px',
-    fontSize: '12px',
-    fontWeight: 600,
-    textTransform: 'capitalize',
-  },
-  progressBarTrack: {
+  progressTrack: {
     width: '100%',
-    height: '10px',
+    height: '9px',
     backgroundColor: '#e2e8f0',
     borderRadius: '999px',
     overflow: 'hidden',
   },
-  progressBarFill: {
+  progressFill: {
     height: '100%',
     borderRadius: '999px',
     transition: 'width 0.4s ease',
@@ -1317,7 +1516,10 @@ const styles = {
     marginTop: '6px',
     fontWeight: 500,
   },
-  metaDateNote: {
+  miniDetailRow: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
     fontSize: '12px',
     color: '#475569',
     backgroundColor: '#f8fafc',
@@ -1325,34 +1527,36 @@ const styles = {
     borderRadius: '6px',
     border: '1px solid #e2e8f0',
   },
-  cardSection: {
+  // Sección del gráfico
+  chartCard: {
     backgroundColor: '#ffffff',
     borderRadius: '12px',
     border: '1px solid #e2e8f0',
     padding: '22px 24px',
-    boxShadow: '0 1px 3px rgba(15, 23, 42, 0.03)',
+    boxShadow: '0 1px 3px rgba(15, 23, 42, 0.04)',
   },
-  sectionHeader: {
+  chartHeader: {
     display: 'flex',
     flexWrap: 'wrap',
     justifyContent: 'space-between',
     alignItems: 'center',
-    gap: '12px',
+    gap: '14px',
     marginBottom: '20px',
   },
-  sectionTitle: {
+  chartTitle: {
     margin: 0,
     fontSize: '17px',
     fontWeight: 700,
     color: '#0f172a',
   },
-  sectionDescription: {
+  chartSubtitle: {
     margin: '4px 0 0 0',
     fontSize: '13px',
     color: '#64748b',
   },
   chartToggleGroup: {
     display: 'flex',
+    flexWrap: 'wrap',
     backgroundColor: '#f1f5f9',
     padding: '4px',
     borderRadius: '8px',
@@ -1368,7 +1572,7 @@ const styles = {
     borderRadius: '6px',
     cursor: 'pointer',
   },
-  chartToggleActive: {
+  chartToggleBtnActive: {
     border: 'none',
     backgroundColor: '#ffffff',
     color: '#1e3a8a',
@@ -1378,6 +1582,17 @@ const styles = {
     borderRadius: '6px',
     cursor: 'pointer',
     boxShadow: '0 1px 2px rgba(15, 23, 42, 0.08)',
+  },
+  emptyChart: {
+    padding: '48px 20px',
+    textAlign: 'center',
+    color: '#64748b',
+    backgroundColor: '#f8fafc',
+    borderRadius: '8px',
+    border: '1px dashed #cbd5e1',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '6px',
   },
   tooltipBox: {
     backgroundColor: '#ffffff',
@@ -1412,22 +1627,13 @@ const styles = {
   tooltipValue: {
     color: '#0f172a',
   },
-  recordCountBadge: {
+  countBadge: {
     backgroundColor: '#f1f5f9',
     color: '#475569',
     padding: '4px 12px',
     borderRadius: '999px',
     fontSize: '12px',
     fontWeight: 600,
-  },
-  emptyState: {
-    padding: '36px 20px',
-    textAlign: 'center',
-    color: '#64748b',
-    backgroundColor: '#f8fafc',
-    borderRadius: '8px',
-    border: '1px dashed #cbd5e1',
-    fontSize: '14px',
   },
   tableResponsive: {
     width: '100%',
@@ -1436,7 +1642,7 @@ const styles = {
   table: {
     width: '100%',
     borderCollapse: 'collapse',
-    fontSize: '14px',
+    fontSize: '13.5px',
   },
   th: {
     textAlign: 'left',
@@ -1444,7 +1650,7 @@ const styles = {
     backgroundColor: '#f8fafc',
     borderBottom: '2px solid #e2e8f0',
     color: '#475569',
-    fontSize: '12px',
+    fontSize: '11.5px',
     fontWeight: 700,
     textTransform: 'uppercase',
     letterSpacing: '0.4px',
@@ -1453,16 +1659,17 @@ const styles = {
     borderBottom: '1px solid #f1f5f9',
   },
   td: {
-    padding: '13px 14px',
+    padding: '12px 14px',
     verticalAlign: 'middle',
   },
-  coordsCode: {
-    fontFamily: 'monospace',
-    fontSize: '12.5px',
+  progressPercentPill: {
+    display: 'inline-block',
+    padding: '2px 8px',
+    borderRadius: '4px',
     backgroundColor: '#f1f5f9',
     color: '#334155',
-    padding: '3px 8px',
-    borderRadius: '4px',
+    fontSize: '12px',
+    fontWeight: 600,
   },
 };
 
