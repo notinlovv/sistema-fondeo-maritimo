@@ -1,6 +1,7 @@
 import { Stack } from 'expo-router';
 import { useEffect } from 'react';
 import { initDB } from '../db/database';
+import { iniciarObservadorRed } from '../sync/syncManager';
 
 export default function RootLayout() {
   useEffect(() => {
@@ -10,6 +11,13 @@ export default function RootLayout() {
     } catch (error) {
       console.error("Error inicializando la BD local:", error);
     }
+
+    // Iniciar escucha reactiva de red para vaciar la cola Outbox automáticamente
+    const unsubscribe = iniciarObservadorRed();
+
+    return () => {
+      unsubscribe();
+    };
   }, []);
 
   return (

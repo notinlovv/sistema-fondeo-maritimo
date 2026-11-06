@@ -182,3 +182,4 @@ export const iniciarObservadorRed = (): (() => void) => {
 
   return unsubscribe;
 };
+

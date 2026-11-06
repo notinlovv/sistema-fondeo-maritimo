@@ -17,6 +17,7 @@ import * as Location from 'expo-location';
 import uuid from 'react-native-uuid';
 import { guardarRegistroYEncolar, contarRegistrosPendientes } from '../db/outbox';
 import { registroSchema } from '../schemas/registro';
+import { sincronizarLote } from '../sync/syncManager';
 
 interface FormInputValues {
   linea_id: number;
@@ -171,6 +172,11 @@ export default function CapturaTerrenoScreen() {
         metros_avanzados: '',
         observacion: '',
       });
+
+      // Disparar sincronización oportunista si hay red en este instante
+      sincronizarLote()
+        .then(() => refrescarContadorPendientes())
+        .catch(() => {});
 
       await refrescarContadorPendientes();
     } catch (error) {
