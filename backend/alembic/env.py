@@ -1,11 +1,10 @@
 import os
 from logging.config import fileConfig
-from sqlalchemy import engine_from_config, pool
-from alembic import context
 
-# 1. Importar la Base y los modelos para que Alembic detecte la estructura
-from app.database import Base
-import app.models 
+from alembic import context
+from sqlalchemy import engine_from_config, pool
+
+from app import models
 
 # Configuración de Alembic
 config = context.config
@@ -18,7 +17,7 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 # 3. Asignar la metadata de los modelos
-target_metadata = Base.metadata
+target_metadata = models.Base.metadata
 
 def run_migrations_offline() -> None:
     url = config.get_main_option("sqlalchemy.url")

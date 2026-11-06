@@ -1,0 +1,5 @@
+__pycache__/
+*.py[cod]
+
+/backend/.venv/
+repomix-output.xml
