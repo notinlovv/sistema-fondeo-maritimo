@@ -27,7 +27,7 @@ export type EstadoSync = 'pendiente' | 'sincronizado' | 'conflicto';
 /**
  * Estados posibles del ítem en la cola de salida (Transactional Outbox).
  */
-export type OutboxEstado = 'pendiente' | 'en_proceso' | 'fallido';
+export type OutboxEstado = 'pendiente' | 'en_proceso' | 'fallido' | 'conflicto' | 'completado';
 
 /**
  * Representación del registro de avance en la base de datos local.
@@ -44,7 +44,7 @@ export interface RegistroLocal {
   observacion: string | null;
   estado_sync: EstadoSync; // Default: 'pendiente'
   creado_en: string;
-  sincronizado_en: string | null;
+  sincronizado_en?: string | null;
   version_esquema: number; // Default: 1
 }
 
