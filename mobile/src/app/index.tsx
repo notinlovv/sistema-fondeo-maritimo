@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -10,6 +10,7 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
+  RefreshControl,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useForm, Controller } from 'react-hook-form';
@@ -18,6 +19,8 @@ import uuid from 'react-native-uuid';
 import { guardarRegistroYEncolar, contarRegistrosPendientes } from '../db/outbox';
 import { registroSchema } from '../schemas/registro';
 import { sincronizarLote } from '../sync/syncManager';
+import { SyncStatusBar } from '../components/SyncStatusBar';
+import { ListaRegistrosRecientes } from '../components/ListaRegistrosRecientes';
 
 interface FormInputValues {
   linea_id: number;
@@ -37,11 +40,12 @@ export default function CapturaTerrenoScreen() {
   const [isRefreshingGps, setIsRefreshingGps] = useState<boolean>(false);
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [pendientesCount, setPendientesCount] = useState<number>(0);
+  const [refreshing, setRefreshing] = useState<boolean>(false);
+  const [refreshTrigger, setRefreshTrigger] = useState<number>(0);
 
   const {
     control,
     handleSubmit,
-    setValue,
     setError,
     clearErrors,
     reset,
@@ -55,14 +59,20 @@ export default function CapturaTerrenoScreen() {
   });
 
   // Actualizar contador de registros pendientes en el Outbox local
-  const refrescarContadorPendientes = async () => {
+  const refrescarContadorPendientes = useCallback(async () => {
     try {
       const count = await contarRegistrosPendientes();
       setPendientesCount(count);
     } catch (err) {
       console.warn('Error al leer registros pendientes:', err);
     }
-  };
+  }, []);
+
+  // Recarga integral de componentes de sincronización y lista reciente
+  const recargarTodo = useCallback(async () => {
+    await refrescarContadorPendientes();
+    setRefreshTrigger((prev) => prev + 1);
+  }, [refrescarContadorPendientes]);
 
   // Captura desatendida de coordenadas mediante el hardware GPS
   const capturarCoordenadasGPS = async () => {
@@ -99,7 +109,20 @@ export default function CapturaTerrenoScreen() {
   useEffect(() => {
     capturarCoordenadasGPS();
     refrescarContadorPendientes();
-  }, []);
+  }, [refrescarContadorPendientes]);
+
+  // Pull to refresh: ejecuta sincronización de lote y recarga la lista
+  const onPullToRefresh = async () => {
+    setRefreshing(true);
+    try {
+      await sincronizarLote();
+      await recargarTodo();
+    } catch (err) {
+      console.warn('Error durante pull to refresh:', err);
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   // Generación de UUID v4 con compatibilidad universal
   const generarUUID = (): string => {
@@ -173,12 +196,13 @@ export default function CapturaTerrenoScreen() {
         observacion: '',
       });
 
+      // 5. Refresco inmediato de la cola Outbox y de la lista de registros recientes
+      await recargarTodo();
+
       // Disparar sincronización oportunista si hay red en este instante
       sincronizarLote()
-        .then(() => refrescarContadorPendientes())
+        .then(() => recargarTodo())
         .catch(() => {});
-
-      await refrescarContadorPendientes();
     } catch (error) {
       console.error('Error al guardar registro local:', error);
       Alert.alert(
@@ -199,26 +223,33 @@ export default function CapturaTerrenoScreen() {
         <ScrollView
           contentContainerStyle={styles.scrollContent}
           keyboardShouldPersistTaps="handled"
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onPullToRefresh}
+              tintColor="#38bdf8"
+              colors={['#2563eb', '#16a34a']}
+            />
+          }
         >
           {/* Encabezado Terreno */}
           <View style={styles.header}>
             <View style={styles.headerTitleRow}>
               <Text style={styles.appTitle}>Sistema de Fondeo</Text>
-              <View style={styles.offlineBadge}>
-                <Text style={styles.offlineBadgeText}>Modo Offline</Text>
-              </View>
+              <Text style={styles.appHeaderBadge}>Terreno</Text>
             </View>
-            <Text style={styles.screenSubtitle}>Captura de Avance Diario</Text>
-
-            {/* Badge de Registros en Cola Outbox */}
-            <View style={styles.counterRow}>
-              <Text style={styles.counterText}>
-                Cola Outbox Local: <Text style={styles.counterBold}>{pendientesCount} pendientes</Text>
-              </Text>
-            </View>
+            <Text style={styles.screenSubtitle}>
+              Captura Diaria de Avance con Patrón Outbox
+            </Text>
           </View>
 
-          {/* Tarjeta de Certificación GPS de Hardware */}
+          {/* 1. Componente Superior: SyncStatusBar (HU-02) */}
+          <SyncStatusBar
+            pendientes={pendientesCount}
+            onSyncComplete={recargarTodo}
+          />
+
+          {/* 2. Tarjeta de Certificación GPS de Hardware */}
           <View style={styles.card}>
             <View style={styles.cardHeaderRow}>
               <Text style={styles.cardTitle}>Geolocalización por Hardware</Text>
@@ -226,29 +257,32 @@ export default function CapturaTerrenoScreen() {
                 style={[
                   styles.statusPill,
                   gpsStatus === 'fijado' && styles.statusPillSuccess,
-                  (gpsStatus === 'buscando' || gpsStatus === 'iniciando') && styles.statusPillWarning,
-                  (gpsStatus === 'error' || gpsStatus === 'denegado') && styles.statusPillDanger,
+                  (gpsStatus === 'buscando' || gpsStatus === 'iniciando') &&
+                    styles.statusPillWarning,
+                  (gpsStatus === 'error' || gpsStatus === 'denegado') &&
+                    styles.statusPillDanger,
                 ]}
               >
                 <Text
                   style={[
                     styles.statusPillText,
                     gpsStatus === 'fijado' && styles.statusTextSuccess,
-                    (gpsStatus === 'buscando' || gpsStatus === 'iniciando') && styles.statusTextWarning,
-                    (gpsStatus === 'error' || gpsStatus === 'denegado') && styles.statusTextDanger,
+                    (gpsStatus === 'buscando' || gpsStatus === 'iniciando') &&
+                      styles.statusTextWarning,
+                    (gpsStatus === 'error' || gpsStatus === 'denegado') &&
+                      styles.statusTextDanger,
                   ]}
                 >
                   {gpsStatus === 'fijado' && 'GPS Fijado'}
-                  {(gpsStatus === 'buscando' || gpsStatus === 'iniciando') && 'Buscando señal...'}
+                  {(gpsStatus === 'buscando' || gpsStatus === 'iniciando') &&
+                    'Buscando señal...'}
                   {gpsStatus === 'denegado' && 'Permiso Denegado'}
                   {gpsStatus === 'error' && 'Sin Señal GPS'}
                 </Text>
               </View>
             </View>
 
-            {gpsError ? (
-              <Text style={styles.gpsErrorText}>{gpsError}</Text>
-            ) : null}
+            {gpsError ? <Text style={styles.gpsErrorText}>{gpsError}</Text> : null}
 
             {/* Coordenadas estrictamente de solo lectura */}
             <View style={styles.gpsGrid}>
@@ -256,7 +290,9 @@ export default function CapturaTerrenoScreen() {
                 <Text style={styles.readOnlyLabel}>Latitud (Solo lectura):</Text>
                 <TextInput
                   style={[styles.input, styles.inputReadOnly]}
-                  value={coords.latitude !== null ? coords.latitude.toFixed(6) : '---'}
+                  value={
+                    coords.latitude !== null ? coords.latitude.toFixed(6) : '---'
+                  }
                   editable={false}
                   selectTextOnFocus={false}
                 />
@@ -266,7 +302,9 @@ export default function CapturaTerrenoScreen() {
                 <Text style={styles.readOnlyLabel}>Longitud (Solo lectura):</Text>
                 <TextInput
                   style={[styles.input, styles.inputReadOnly]}
-                  value={coords.longitude !== null ? coords.longitude.toFixed(6) : '---'}
+                  value={
+                    coords.longitude !== null ? coords.longitude.toFixed(6) : '---'
+                  }
                   editable={false}
                   selectTextOnFocus={false}
                 />
@@ -283,12 +321,14 @@ export default function CapturaTerrenoScreen() {
               {isRefreshingGps ? (
                 <ActivityIndicator color="#ffffff" size="small" />
               ) : (
-                <Text style={styles.refreshGpsButtonText}>Refrescar Posición GPS</Text>
+                <Text style={styles.refreshGpsButtonText}>
+                  Refrescar Posición GPS
+                </Text>
               )}
             </TouchableOpacity>
           </View>
 
-          {/* Formulario de Captura */}
+          {/* 3. Formulario de Captura en Terreno */}
           <View style={styles.card}>
             <Text style={styles.cardTitle}>Datos de la Maniobra</Text>
 
@@ -296,7 +336,9 @@ export default function CapturaTerrenoScreen() {
             <View style={styles.fieldGroup}>
               <Text style={styles.label}>Línea de Fondeo:</Text>
               <View style={styles.lockedLineBadge}>
-                <Text style={styles.lockedLineText}>Línea Piloto (ID: 1) - Fondeo Activo</Text>
+                <Text style={styles.lockedLineText}>
+                  Línea Piloto (ID: 1) - Fondeo Activo 🔒
+                </Text>
               </View>
             </View>
 
@@ -330,7 +372,9 @@ export default function CapturaTerrenoScreen() {
                 )}
               />
               {errors.metros_avanzados ? (
-                <Text style={styles.errorMessage}>{errors.metros_avanzados.message}</Text>
+                <Text style={styles.errorMessage}>
+                  {errors.metros_avanzados.message}
+                </Text>
               ) : null}
             </View>
 
@@ -361,7 +405,8 @@ export default function CapturaTerrenoScreen() {
             <TouchableOpacity
               style={[
                 styles.submitButton,
-                (isSaving || coords.latitude === null) && styles.submitButtonDisabled,
+                (isSaving || coords.latitude === null) &&
+                  styles.submitButtonDisabled,
               ]}
               onPress={handleSubmit(onSubmit)}
               disabled={isSaving}
@@ -370,10 +415,15 @@ export default function CapturaTerrenoScreen() {
               {isSaving ? (
                 <ActivityIndicator color="#ffffff" size="large" />
               ) : (
-                <Text style={styles.submitButtonText}>Guardar Registro en Terreno</Text>
+                <Text style={styles.submitButtonText}>
+                  Guardar Registro en Terreno
+                </Text>
               )}
             </TouchableOpacity>
           </View>
+
+          {/* 4. Componente Inferior: Lista de Registros Recientes */}
+          <ListaRegistrosRecientes refreshTrigger={refreshTrigger} />
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -390,10 +440,10 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     padding: 16,
-    paddingBottom: 36,
+    paddingBottom: 40,
   },
   header: {
-    marginBottom: 16,
+    marginBottom: 12,
   },
   headerTitleRow: {
     flexDirection: 'row',
@@ -406,37 +456,20 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#ffffff',
   },
-  offlineBadge: {
-    backgroundColor: '#0369a1',
+  appHeaderBadge: {
+    backgroundColor: '#1e293b',
+    color: '#38bdf8',
     paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 12,
-  },
-  offlineBadgeText: {
-    color: '#ffffff',
+    paddingVertical: 3,
+    borderRadius: 8,
     fontSize: 12,
     fontWeight: '700',
+    borderWidth: 1,
+    borderColor: '#0284c7',
   },
   screenSubtitle: {
-    fontSize: 15,
+    fontSize: 14,
     color: '#94a3b8',
-    marginBottom: 8,
-  },
-  counterRow: {
-    backgroundColor: '#1e293b',
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#334155',
-  },
-  counterText: {
-    color: '#cbd5e1',
-    fontSize: 13,
-  },
-  counterBold: {
-    fontWeight: '700',
-    color: '#38bdf8',
   },
   card: {
     backgroundColor: '#ffffff',

@@ -197,3 +197,22 @@ export const contarRegistrosPendientes = async (): Promise<number> => {
   return row?.total ?? 0;
 };
 
+/**
+ * Obtiene los registros de avance locales más recientes ordenados descendente por fecha de creación.
+ *
+ * @param limite Cantidad máxima de registros a recuperar (por defecto 10).
+ * @returns Lista de registros locales ordenados cronológicamente desde el más nuevo.
+ */
+export const obtenerRegistrosRecientes = async (limite = 10): Promise<RegistroLocal[]> => {
+  const db = getDB();
+  return await db.getAllAsync<RegistroLocal>(
+    `SELECT id, linea_id, usuario_id, metros_avanzados, fecha, latitud, longitud,
+            estado, observacion, estado_sync, creado_en, sincronizado_en, version_esquema
+     FROM registros_locales
+     ORDER BY creado_en DESC
+     LIMIT ?`,
+    [limite]
+  );
+};
+
+
