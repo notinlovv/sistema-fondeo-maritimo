@@ -18,8 +18,8 @@ export interface SyncStatusBarProps {
 }
 
 /**
- * Barra reactiva superior que alerta sobre la falta de conexión y
- * muestra el contador de transacciones encoladas en Outbox con opción de sincronización manual.
+ * Barra superior reactiva de conectividad y estado de cola Outbox.
+ * Diseño industrial Dark/Slate minimalista.
  */
 export function SyncStatusBar({
   pendientes: propPendientes,
@@ -29,7 +29,6 @@ export function SyncStatusBar({
   const [conteoLocal, setConteoLocal] = useState<number>(propPendientes ?? 0);
   const [isSyncingLocal, setIsSyncingLocal] = useState<boolean>(false);
 
-  // Considerar offline si explícitamente isConnected o isInternetReachable es false
   const isOffline =
     netInfo.isConnected === false || netInfo.isInternetReachable === false;
 
@@ -75,58 +74,56 @@ export function SyncStatusBar({
 
   return (
     <View style={styles.container}>
-      {/* Banner de alerta visual cuando no hay conectividad (HU-02) */}
+      {/* Alerta de modo sin conexión */}
       {isOffline && (
         <View style={styles.offlineBanner}>
-          <Text style={styles.offlineBannerIcon}>⚠️</Text>
+          <View style={styles.offlineDot} />
           <Text style={styles.offlineBannerText}>
-            Modo sin conexión - Los registros se guardan en el dispositivo
+            Modo sin conexión · Los registros se guardan en el dispositivo
           </Text>
         </View>
       )}
 
-      {/* Píldora de estado de la cola de sincronización */}
-      <View
-        style={[
-          styles.statusRow,
-          cantidadPendientes > 0 ? styles.statusRowPending : styles.statusRowSynced,
-        ]}
-      >
-        <View style={styles.statusInfoCol}>
-          {cantidadPendientes > 0 ? (
-            <View style={styles.pendingBadgeRow}>
-              <Text style={styles.pendingIcon}>☁️</Text>
-              <Text style={styles.pendingText}>
-                <Text style={styles.pendingCount}>{cantidadPendientes}</Text>{' '}
+      {/* Estado de sincronización */}
+      <View style={styles.statusRow}>
+        <View style={styles.statusLeft}>
+          <View
+            style={[
+              styles.statusDot,
+              cantidadPendientes > 0
+                ? styles.statusDotPending
+                : styles.statusDotSynced,
+            ]}
+          />
+          <Text style={styles.statusText}>
+            {cantidadPendientes > 0 ? (
+              <>
+                <Text style={styles.pendingNumber}>{cantidadPendientes}</Text>{' '}
                 {cantidadPendientes === 1
-                  ? 'pendiente por sincronizar'
-                  : 'pendientes por sincronizar'}
-              </Text>
-            </View>
-          ) : (
-            <View style={styles.syncedBadgeRow}>
-              <Text style={styles.syncedIcon}>✓</Text>
-              <Text style={styles.syncedText}>Todo sincronizado</Text>
-            </View>
-          )}
+                  ? 'pendiente de sincronizar'
+                  : 'pendientes de sincronizar'}
+              </>
+            ) : (
+              'Todo sincronizado'
+            )}
+          </Text>
         </View>
 
-        {/* Botón táctil para sincronizar inmediatamente si hay pendientes */}
         {cantidadPendientes > 0 && (
           <TouchableOpacity
             style={[
-              styles.syncNowButton,
-              (isSyncingLocal || isOffline) && styles.syncNowButtonDisabled,
+              styles.syncButton,
+              (isSyncingLocal || isOffline) && styles.syncButtonDisabled,
             ]}
             onPress={handleSincronizarManual}
             disabled={isSyncingLocal || isOffline}
-            activeOpacity={0.8}
+            activeOpacity={0.7}
           >
             {isSyncingLocal ? (
-              <ActivityIndicator size="small" color="#ffffff" />
+              <ActivityIndicator size="small" color="#f8fafc" />
             ) : (
-              <Text style={styles.syncNowButtonText}>
-                {isOffline ? 'Sin red' : 'Sincronizar ahora'}
+              <Text style={styles.syncButtonText}>
+                {isOffline ? 'Sin red' : 'Sincronizar'}
               </Text>
             )}
           </TouchableOpacity>
@@ -141,96 +138,83 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   offlineBanner: {
-    backgroundColor: '#b45309', // Ámbar / naranja de alta visibilidad
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    borderRadius: 8,
+    backgroundColor: '#78350f',
+    borderColor: '#b45309',
+    borderWidth: 1,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 6,
     flexDirection: 'row',
     alignItems: 'center',
     marginBottom: 8,
-    borderWidth: 1,
-    borderColor: '#d97706',
   },
-  offlineBannerIcon: {
-    fontSize: 16,
+  offlineDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#fbbf24',
     marginRight: 8,
   },
   offlineBannerText: {
-    color: '#ffffff',
-    fontSize: 13,
-    fontWeight: '700',
+    color: '#fef3c7',
+    fontSize: 12,
+    fontWeight: '600',
     flex: 1,
-    lineHeight: 18,
   },
   statusRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    borderRadius: 8,
-    borderWidth: 1,
-  },
-  statusRowPending: {
     backgroundColor: '#1e293b',
-    borderColor: '#f59e0b',
-  },
-  statusRowSynced: {
-    backgroundColor: '#064e3b',
-    borderColor: '#10b981',
-  },
-  statusInfoCol: {
-    flex: 1,
-  },
-  pendingBadgeRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  pendingIcon: {
-    fontSize: 15,
-    marginRight: 6,
-  },
-  pendingText: {
-    color: '#e2e8f0',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  pendingCount: {
-    color: '#f59e0b',
-    fontWeight: '800',
-  },
-  syncedBadgeRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  syncedIcon: {
-    fontSize: 15,
-    color: '#34d399',
-    fontWeight: '900',
-    marginRight: 6,
-  },
-  syncedText: {
-    color: '#34d399',
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  syncNowButton: {
-    backgroundColor: '#2563eb',
-    paddingVertical: 7,
+    borderColor: '#334155',
+    borderWidth: 1,
+    paddingVertical: 9,
     paddingHorizontal: 12,
     borderRadius: 6,
-    marginLeft: 10,
-    minHeight: 34,
+  },
+  statusLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  statusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    marginRight: 8,
+  },
+  statusDotPending: {
+    backgroundColor: '#f59e0b',
+  },
+  statusDotSynced: {
+    backgroundColor: '#10b981',
+  },
+  statusText: {
+    color: '#cbd5e1',
+    fontSize: 13,
+    fontWeight: '500',
+  },
+  pendingNumber: {
+    color: '#f8fafc',
+    fontWeight: '700',
+  },
+  syncButton: {
+    backgroundColor: '#334155',
+    borderColor: '#475569',
+    borderWidth: 1,
+    paddingVertical: 5,
+    paddingHorizontal: 12,
+    borderRadius: 5,
+    minHeight: 30,
     justifyContent: 'center',
     alignItems: 'center',
   },
-  syncNowButtonDisabled: {
-    backgroundColor: '#475569',
+  syncButtonDisabled: {
+    opacity: 0.5,
   },
-  syncNowButtonText: {
-    color: '#ffffff',
+  syncButtonText: {
+    color: '#f8fafc',
     fontSize: 12,
-    fontWeight: '700',
+    fontWeight: '600',
   },
 });
-

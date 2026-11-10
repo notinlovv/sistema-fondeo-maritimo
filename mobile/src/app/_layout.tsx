@@ -21,20 +21,21 @@ export default function RootLayout() {
   }, []);
 
   return (
-    <Stack>
+    <Stack screenOptions={{ headerShown: false }}>
       <Stack.Screen 
         name="index" 
         options={{ 
           title: 'Inicio',
-          headerShown: false // Oculta la barra superior para que el Login se vea limpio
+          headerShown: false
         }} 
       />
       <Stack.Screen 
         name="explore" 
         options={{ 
           title: 'Captura en Terreno',
-          headerBackVisible: false, // Evitar que botón "volver atrás" tire el login
-          gestureEnabled: false // Evita que en iOS/Android deslicen para volver al login
+          headerShown: false,
+          headerBackVisible: false,
+          gestureEnabled: false
         }} 
       />
     </Stack>

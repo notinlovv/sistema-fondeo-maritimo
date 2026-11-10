@@ -11,8 +11,26 @@ export interface ListaRegistrosRecientesProps {
 }
 
 /**
- * Despliega los últimos registros de avance capturados en terreno con sus respectivos
- * estados de sincronización: Pendiente, Sincronizado o Conflicto.
+ * Parsea el campo de observación para extraer etiquetas entre corchetes, ej: "[Tendido de línea] Nota adicional"
+ */
+function parseObservacion(obs: string | null): { fase: string | null; nota: string } | null {
+  if (!obs) return null;
+  const match = obs.match(/^\[([^\]]+)\](?:\s*(.*))?$/);
+  if (match) {
+    return {
+      fase: match[1],
+      nota: match[2] || '',
+    };
+  }
+  return {
+    fase: null,
+    nota: obs,
+  };
+}
+
+/**
+ * Despliega los últimos registros de avance guardados localmente.
+ * Diseño industrial Dark/Slate minimalista con resaltado de fase de maniobra.
  */
 export function ListaRegistrosRecientes({
   registros: propRegistros,
@@ -47,7 +65,7 @@ export function ListaRegistrosRecientes({
       const mes = (d.getMonth() + 1).toString().padStart(2, '0');
       const horas = d.getHours().toString().padStart(2, '0');
       const minutos = d.getMinutes().toString().padStart(2, '0');
-      return `${horas}:${minutos} hrs (${dia}/${mes})`;
+      return `${horas}:${minutos} · ${dia}/${mes}`;
     } catch {
       return isoDate;
     }
@@ -58,7 +76,7 @@ export function ListaRegistrosRecientes({
   return (
     <View style={styles.card}>
       <View style={styles.headerRow}>
-        <Text style={styles.title}>Registros Recientes en Terreno</Text>
+        <Text style={styles.title}>Registros Recientes</Text>
         <View style={styles.countBadge}>
           <Text style={styles.countBadgeText}>{lista.length}</Text>
         </View>
@@ -66,10 +84,9 @@ export function ListaRegistrosRecientes({
 
       {lista.length === 0 ? (
         <View style={styles.emptyContainer}>
-          <Text style={styles.emptyIcon}>📋</Text>
-          <Text style={styles.emptyTitle}>Sin registros locales aún</Text>
+          <Text style={styles.emptyTitle}>Sin registros locales</Text>
           <Text style={styles.emptySubtitle}>
-            Usa el formulario superior para capturar el primer avance.
+            Los avances guardados aparecerán aquí.
           </Text>
         </View>
       ) : (
@@ -78,10 +95,11 @@ export function ListaRegistrosRecientes({
             const esPendiente = reg.estado_sync === 'pendiente';
             const esSincronizado = reg.estado_sync === 'sincronizado';
             const esConflicto = reg.estado_sync === 'conflicto';
+            const parsedObs = parseObservacion(reg.observacion);
 
             return (
               <View key={reg.id} style={styles.itemRow}>
-                {/* Columna Izquierda: Metros y Metadatos */}
+                {/* Columna Izquierda: Metros, Fase y Metadatos */}
                 <View style={styles.itemLeftCol}>
                   <View style={styles.metrosRow}>
                     <Text style={styles.metrosText}>
@@ -91,16 +109,31 @@ export function ListaRegistrosRecientes({
                   </View>
 
                   <Text style={styles.horaText}>
-                    🕒 {formatearFechaHora(reg.creado_en || reg.fecha)}
+                    {formatearFechaHora(reg.creado_en || reg.fecha)}
                   </Text>
 
-                  {reg.observacion ? (
+                  {parsedObs?.fase ? (
+                    <View style={styles.faseContainer}>
+                      <View style={styles.faseTagBadge}>
+                        <Text style={styles.faseTagText}>{parsedObs.fase}</Text>
+                      </View>
+                      {parsedObs.nota ? (
+                        <Text
+                          style={styles.observacionText}
+                          numberOfLines={1}
+                          ellipsizeMode="tail"
+                        >
+                          {parsedObs.nota}
+                        </Text>
+                      ) : null}
+                    </View>
+                  ) : reg.observacion ? (
                     <Text
                       style={styles.observacionText}
                       numberOfLines={1}
                       ellipsizeMode="tail"
                     >
-                      📝 {reg.observacion}
+                      {reg.observacion}
                     </Text>
                   ) : null}
                 </View>
@@ -123,9 +156,9 @@ export function ListaRegistrosRecientes({
                         esConflicto && styles.statusTextConflicto,
                       ]}
                     >
-                      {esPendiente && '⏳ Pendiente'}
-                      {esSincronizado && '✓ Sincronizado'}
-                      {esConflicto && '⚠️ Conflicto'}
+                      {esPendiente && 'Pendiente'}
+                      {esSincronizado && 'Sincronizado'}
+                      {esConflicto && 'Conflicto'}
                     </Text>
                   </View>
 
@@ -146,72 +179,65 @@ export function ListaRegistrosRecientes({
 
 const styles = StyleSheet.create({
   card: {
-    backgroundColor: '#ffffff',
-    borderRadius: 12,
-    padding: 18,
+    backgroundColor: '#1e293b',
+    borderColor: '#334155',
+    borderWidth: 1,
+    borderRadius: 8,
+    padding: 16,
     marginBottom: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
   },
   headerRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 14,
+    marginBottom: 12,
     borderBottomWidth: 1,
-    borderBottomColor: '#f1f5f9',
-    paddingBottom: 10,
+    borderBottomColor: '#334155',
+    paddingBottom: 8,
   },
   title: {
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '700',
-    color: '#0f172a',
+    color: '#f8fafc',
   },
   countBadge: {
-    backgroundColor: '#e2e8f0',
+    backgroundColor: '#334155',
     paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 12,
+    paddingVertical: 2,
+    borderRadius: 10,
   },
   countBadgeText: {
     fontSize: 12,
-    fontWeight: '700',
-    color: '#334155',
+    fontWeight: '600',
+    color: '#94a3b8',
   },
   emptyContainer: {
     alignItems: 'center',
-    paddingVertical: 24,
-  },
-  emptyIcon: {
-    fontSize: 32,
-    marginBottom: 6,
+    paddingVertical: 20,
   },
   emptyTitle: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: '#475569',
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#94a3b8',
     marginBottom: 2,
   },
   emptySubtitle: {
-    fontSize: 13,
-    color: '#94a3b8',
+    fontSize: 12,
+    color: '#64748b',
     textAlign: 'center',
   },
   listContainer: {
-    gap: 12,
+    gap: 8,
   },
   itemRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    backgroundColor: '#f8fafc',
+    backgroundColor: '#0f172a',
     padding: 12,
-    borderRadius: 8,
+    borderRadius: 6,
     borderWidth: 1,
-    borderColor: '#e2e8f0',
+    borderColor: '#334155',
   },
   itemLeftCol: {
     flex: 1,
@@ -221,69 +247,90 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'baseline',
     gap: 8,
-    marginBottom: 3,
+    marginBottom: 2,
   },
   metrosText: {
     fontSize: 18,
     fontWeight: '800',
-    color: '#0f172a',
+    color: '#f8fafc',
   },
   lineaText: {
     fontSize: 12,
-    fontWeight: '600',
-    color: '#64748b',
+    fontWeight: '500',
+    color: '#94a3b8',
   },
   horaText: {
-    fontSize: 12,
+    fontSize: 11,
     color: '#64748b',
     fontWeight: '500',
-    marginBottom: 2,
+    marginBottom: 4,
+  },
+  faseContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: 2,
+  },
+  faseTagBadge: {
+    backgroundColor: 'rgba(2, 132, 199, 0.15)',
+    borderColor: 'rgba(56, 189, 248, 0.35)',
+    borderWidth: 1,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  faseTagText: {
+    color: '#38bdf8',
+    fontSize: 11,
+    fontWeight: '600',
+    letterSpacing: 0.2,
   },
   observacionText: {
     fontSize: 12,
-    color: '#475569',
+    color: '#94a3b8',
     fontStyle: 'italic',
+    flexShrink: 1,
   },
   itemRightCol: {
     alignItems: 'flex-end',
   },
   statusBadge: {
-    paddingHorizontal: 9,
-    paddingVertical: 4,
-    borderRadius: 12,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 4,
     borderWidth: 1,
   },
   statusBadgePendiente: {
-    backgroundColor: '#fef3c7',
-    borderColor: '#f59e0b',
+    backgroundColor: 'rgba(217, 119, 6, 0.15)',
+    borderColor: '#d97706',
   },
   statusBadgeSincronizado: {
-    backgroundColor: '#dcfce7',
-    borderColor: '#10b981',
+    backgroundColor: 'rgba(16, 185, 129, 0.15)',
+    borderColor: '#059669',
   },
   statusBadgeConflicto: {
-    backgroundColor: '#fee2e2',
-    borderColor: '#ef4444',
+    backgroundColor: 'rgba(220, 38, 38, 0.15)',
+    borderColor: '#dc2626',
   },
   statusBadgeText: {
     fontSize: 11,
-    fontWeight: '700',
+    fontWeight: '600',
   },
   statusTextPendiente: {
-    color: '#b45309',
+    color: '#fbbf24',
   },
   statusTextSincronizado: {
-    color: '#15803d',
+    color: '#34d399',
   },
   statusTextConflicto: {
-    color: '#b91c1c',
+    color: '#f87171',
   },
   conflictoNotice: {
     fontSize: 10,
-    color: '#dc2626',
-    fontWeight: '600',
+    color: '#f87171',
+    fontWeight: '500',
     marginTop: 3,
     textAlign: 'right',
   },
 });
-

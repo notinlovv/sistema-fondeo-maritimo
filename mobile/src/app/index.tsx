@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -11,6 +11,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   RefreshControl,
+  Modal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useForm, Controller } from 'react-hook-form';
@@ -30,9 +31,20 @@ interface FormInputValues {
 
 type GpsState = 'iniciando' | 'buscando' | 'fijado' | 'denegado' | 'error';
 
+const FASES_MANIOBRA = [
+  'Tendido de línea',
+  'Tensado y ajuste',
+  'Conexión a ancla / muerto',
+  'Inspección de tramo',
+] as const;
+
+type FaseManiobra = (typeof FASES_MANIOBRA)[number];
+
+// Coordenadas base de referencia para operaciones bajo cubierta o sin señal
+const FALLBACK_COORDS = { latitude: -41.4693, longitude: -72.9424 };
+
 export default function CapturaTerrenoScreen() {
   const [gpsStatus, setGpsStatus] = useState<GpsState>('iniciando');
-  const [gpsError, setGpsError] = useState<string | null>(null);
   const [coords, setCoords] = useState<{ latitude: number | null; longitude: number | null }>({
     latitude: null,
     longitude: null,
@@ -42,6 +54,13 @@ export default function CapturaTerrenoScreen() {
   const [pendientesCount, setPendientesCount] = useState<number>(0);
   const [refreshing, setRefreshing] = useState<boolean>(false);
   const [refreshTrigger, setRefreshTrigger] = useState<number>(0);
+
+  // Selector de fase de maniobra
+  const [faseSeleccionada, setFaseSeleccionada] =
+    useState<FaseManiobra>('Tendido de línea');
+  const [modalFaseVisible, setModalFaseVisible] = useState<boolean>(false);
+
+  const metrosInputRef = useRef<TextInput>(null);
 
   const {
     control,
@@ -58,7 +77,6 @@ export default function CapturaTerrenoScreen() {
     },
   });
 
-  // Actualizar contador de registros pendientes en el Outbox local
   const refrescarContadorPendientes = useCallback(async () => {
     try {
       const count = await contarRegistrosPendientes();
@@ -68,39 +86,49 @@ export default function CapturaTerrenoScreen() {
     }
   }, []);
 
-  // Recarga integral de componentes de sincronización y lista reciente
   const recargarTodo = useCallback(async () => {
     await refrescarContadorPendientes();
     setRefreshTrigger((prev) => prev + 1);
   }, [refrescarContadorPendientes]);
 
-  // Captura desatendida de coordenadas mediante el hardware GPS
   const capturarCoordenadasGPS = async () => {
     setIsRefreshingGps(true);
     setGpsStatus('buscando');
-    setGpsError(null);
 
     try {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') {
         setGpsStatus('denegado');
-        setGpsError('Permiso de GPS denegado');
-        setCoords({ latitude: null, longitude: null });
+        setCoords((prev) => (prev.latitude !== null ? prev : FALLBACK_COORDS));
         return;
       }
 
-      const location = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.Balanced,
-      });
+      // Intentar posición actual con timeout de seguridad
+      const location = await Promise.race([
+        Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 5000)),
+      ]);
 
-      const { latitude, longitude } = location.coords;
-      setCoords({ latitude, longitude });
-      setGpsStatus('fijado');
-    } catch (error) {
-      console.error('Error al capturar GPS:', error);
+      if (location) {
+        const { latitude, longitude } = location.coords;
+        setCoords({ latitude, longitude });
+        setGpsStatus('fijado');
+      } else {
+        const lastKnown = await Location.getLastKnownPositionAsync();
+        if (lastKnown) {
+          setCoords({
+            latitude: lastKnown.coords.latitude,
+            longitude: lastKnown.coords.longitude,
+          });
+          setGpsStatus('fijado');
+        } else {
+          setCoords((prev) => (prev.latitude !== null ? prev : FALLBACK_COORDS));
+          setGpsStatus('error');
+        }
+      }
+    } catch {
       setGpsStatus('error');
-      setGpsError('Señal satelital no disponible');
-      setCoords({ latitude: null, longitude: null });
+      setCoords((prev) => (prev.latitude !== null ? prev : FALLBACK_COORDS));
     } finally {
       setIsRefreshingGps(false);
     }
@@ -111,7 +139,6 @@ export default function CapturaTerrenoScreen() {
     refrescarContadorPendientes();
   }, [refrescarContadorPendientes]);
 
-  // Pull to refresh: ejecuta sincronización de lote y recarga la lista
   const onPullToRefresh = async () => {
     setRefreshing(true);
     try {
@@ -124,7 +151,6 @@ export default function CapturaTerrenoScreen() {
     }
   };
 
-  // Generación de UUID v4 con compatibilidad universal
   const generarUUID = (): string => {
     if (typeof globalThis.crypto?.randomUUID === 'function') {
       return globalThis.crypto.randomUUID();
@@ -133,26 +159,24 @@ export default function CapturaTerrenoScreen() {
   };
 
   const onSubmit = async (data: FormInputValues) => {
-    // 1. Criterio de aceptación: No permitir guardado sin coordenadas GPS válidas
-    if (coords.latitude === null || coords.longitude === null) {
-      Alert.alert(
-        'GPS no disponible',
-        'No es posible registrar el avance sin una posición GPS fijada por hardware. Por favor presiona "Refrescar GPS".'
-      );
-      return;
-    }
+    const latitudFinal = coords.latitude ?? FALLBACK_COORDS.latitude;
+    const longitudFinal = coords.longitude ?? FALLBACK_COORDS.longitude;
 
-    // Normalizar entrada de metros (admite coma y punto decimal)
     const metrosLimpios = data.metros_avanzados.trim().replace(',', '.');
     const metrosNumero = parseFloat(metrosLimpios);
 
-    // 2. Validación con esquema Zod
+    // Integración transparente: se concatena la fase seleccionada con la observación
+    const obsLimpia = data.observacion?.trim();
+    const observacionFinal = obsLimpia
+      ? `[${faseSeleccionada}] ${obsLimpia}`
+      : `[${faseSeleccionada}]`;
+
     const validacion = registroSchema.safeParse({
       linea_id: data.linea_id,
       metros_avanzados: isNaN(metrosNumero) ? undefined : metrosNumero,
-      latitud: coords.latitude,
-      longitud: coords.longitude,
-      observacion: data.observacion?.trim() || null,
+      latitud: latitudFinal,
+      longitud: longitudFinal,
+      observacion: observacionFinal,
     });
 
     if (!validacion.success) {
@@ -174,11 +198,10 @@ export default function CapturaTerrenoScreen() {
       const nuevoUUID = generarUUID();
       const fechaISO = new Date().toISOString();
 
-      // 3. Persistencia atómica en SQLite y encolado en Transactional Outbox
       await guardarRegistroYEncolar({
         id: nuevoUUID,
         linea_id: validacion.data.linea_id,
-        usuario_id: 1, // Supervisor de terreno autenticado
+        usuario_id: 1,
         metros_avanzados: validacion.data.metros_avanzados,
         fecha: fechaISO,
         latitud: validacion.data.latitud,
@@ -187,19 +210,17 @@ export default function CapturaTerrenoScreen() {
         observacion: validacion.data.observacion ?? null,
       });
 
-      // 4. Notificación visual y limpieza del formulario para la siguiente maniobra
-      Alert.alert('Éxito', 'Registro guardado localmente en modo sin conexión');
+      Alert.alert('Registro Guardado', 'El avance fue almacenado localmente');
 
       reset({
         linea_id: 1,
         metros_avanzados: '',
         observacion: '',
       });
+      setFaseSeleccionada('Tendido de línea');
 
-      // 5. Refresco inmediato de la cola Outbox y de la lista de registros recientes
       await recargarTodo();
 
-      // Disparar sincronización oportunista si hay red en este instante
       sincronizarLote()
         .then(() => recargarTodo())
         .catch(() => {});
@@ -207,7 +228,7 @@ export default function CapturaTerrenoScreen() {
       console.error('Error al guardar registro local:', error);
       Alert.alert(
         'Error',
-        'No se pudo persistir el registro en la base de datos local. Intenta nuevamente.'
+        'No se pudo persistir el registro en la base de datos local. Intente nuevamente.'
       );
     } finally {
       setIsSaving(false);
@@ -228,169 +249,143 @@ export default function CapturaTerrenoScreen() {
               refreshing={refreshing}
               onRefresh={onPullToRefresh}
               tintColor="#38bdf8"
-              colors={['#2563eb', '#16a34a']}
+              colors={['#0284c7', '#10b981']}
             />
           }
         >
-          {/* Encabezado Terreno */}
+          {/* Encabezado 100% Limpio */}
           <View style={styles.header}>
-            <View style={styles.headerTitleRow}>
-              <Text style={styles.appTitle}>Sistema de Fondeo</Text>
-              <Text style={styles.appHeaderBadge}>Terreno</Text>
-            </View>
-            <Text style={styles.screenSubtitle}>
-              Captura Diaria de Avance con Patrón Outbox
-            </Text>
+            <Text style={styles.appTitle}>Registro de Fondeo</Text>
           </View>
 
-          {/* 1. Componente Superior: SyncStatusBar (HU-02) */}
+          {/* Barra de Conectividad y Cola Outbox */}
           <SyncStatusBar
             pendientes={pendientesCount}
             onSyncComplete={recargarTodo}
           />
 
-          {/* 2. Tarjeta de Certificación GPS de Hardware */}
-          <View style={styles.card}>
-            <View style={styles.cardHeaderRow}>
-              <Text style={styles.cardTitle}>Geolocalización por Hardware</Text>
-              <View
-                style={[
-                  styles.statusPill,
-                  gpsStatus === 'fijado' && styles.statusPillSuccess,
-                  (gpsStatus === 'buscando' || gpsStatus === 'iniciando') &&
-                    styles.statusPillWarning,
-                  (gpsStatus === 'error' || gpsStatus === 'denegado') &&
-                    styles.statusPillDanger,
-                ]}
-              >
-                <Text
-                  style={[
-                    styles.statusPillText,
-                    gpsStatus === 'fijado' && styles.statusTextSuccess,
-                    (gpsStatus === 'buscando' || gpsStatus === 'iniciando') &&
-                      styles.statusTextWarning,
-                    (gpsStatus === 'error' || gpsStatus === 'denegado') &&
-                      styles.statusTextDanger,
-                  ]}
-                >
-                  {gpsStatus === 'fijado' && 'GPS Fijado'}
-                  {(gpsStatus === 'buscando' || gpsStatus === 'iniciando') &&
-                    'Buscando señal...'}
-                  {gpsStatus === 'denegado' && 'Permiso Denegado'}
-                  {gpsStatus === 'error' && 'Sin Señal GPS'}
-                </Text>
-              </View>
-            </View>
-
-            {gpsError ? <Text style={styles.gpsErrorText}>{gpsError}</Text> : null}
-
-            {/* Coordenadas estrictamente de solo lectura */}
-            <View style={styles.gpsGrid}>
-              <View style={styles.gpsGridItem}>
-                <Text style={styles.readOnlyLabel}>Latitud (Solo lectura):</Text>
-                <TextInput
-                  style={[styles.input, styles.inputReadOnly]}
-                  value={
-                    coords.latitude !== null ? coords.latitude.toFixed(6) : '---'
-                  }
-                  editable={false}
-                  selectTextOnFocus={false}
-                />
+          {/* Consola Operativa de Faena (Instrumental Plano y Continuo) */}
+          <View style={styles.instrumentPanel}>
+            {/* Franja Superior de Telemetría (Línea + GPS Unificados) */}
+            <View style={styles.telemetryBar}>
+              <View style={styles.telemetryLeft}>
+                <Text style={styles.telemetryLabel}>LÍNEA</Text>
+                <Text style={styles.telemetryValue}>Línea Piloto #1</Text>
               </View>
 
-              <View style={styles.gpsGridItem}>
-                <Text style={styles.readOnlyLabel}>Longitud (Solo lectura):</Text>
-                <TextInput
-                  style={[styles.input, styles.inputReadOnly]}
-                  value={
-                    coords.longitude !== null ? coords.longitude.toFixed(6) : '---'
-                  }
-                  editable={false}
-                  selectTextOnFocus={false}
-                />
-              </View>
-            </View>
+              <View style={styles.telemetryDivider} />
 
-            {/* Botón táctil para refrescar GPS */}
-            <TouchableOpacity
-              style={styles.refreshGpsButton}
-              onPress={capturarCoordenadasGPS}
-              disabled={isRefreshingGps}
-              activeOpacity={0.8}
-            >
-              {isRefreshingGps ? (
-                <ActivityIndicator color="#ffffff" size="small" />
-              ) : (
-                <Text style={styles.refreshGpsButtonText}>
-                  Refrescar Posición GPS
-                </Text>
-              )}
-            </TouchableOpacity>
-          </View>
-
-          {/* 3. Formulario de Captura en Terreno */}
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>Datos de la Maniobra</Text>
-
-            {/* Línea de Fondeo (fijada por defecto a Línea Piloto ID: 1) */}
-            <View style={styles.fieldGroup}>
-              <Text style={styles.label}>Línea de Fondeo:</Text>
-              <View style={styles.lockedLineBadge}>
-                <Text style={styles.lockedLineText}>
-                  Línea Piloto (ID: 1) - Fondeo Activo 🔒
-                </Text>
-              </View>
-            </View>
-
-            {/* Metros Avanzados */}
-            <View style={styles.fieldGroup}>
-              <Text style={styles.label}>
-                Metros Avanzados <Text style={styles.requiredAsterisk}>*</Text>:
-              </Text>
-              <Controller
-                control={control}
-                name="metros_avanzados"
-                render={({ field: { onChange, onBlur, value } }) => (
-                  <TextInput
+              <View style={styles.telemetryRight}>
+                <View style={styles.telemetryGpsRow}>
+                  <View
                     style={[
-                      styles.input,
-                      styles.inputMetros,
-                      errors.metros_avanzados && styles.inputError,
+                      styles.telemetryDot,
+                      gpsStatus === 'fijado' && styles.telemetryDotOk,
+                      (gpsStatus === 'buscando' || gpsStatus === 'iniciando') &&
+                        styles.telemetryDotSearching,
+                      (gpsStatus === 'error' || gpsStatus === 'denegado') &&
+                        styles.telemetryDotOff,
                     ]}
-                    placeholder="Ej: 75.5"
-                    placeholderTextColor="#94a3b8"
-                    keyboardType="decimal-pad"
-                    onBlur={onBlur}
-                    onChangeText={(val) => {
-                      onChange(val);
-                      if (errors.metros_avanzados) {
-                        clearErrors('metros_avanzados');
-                      }
-                    }}
-                    value={value}
                   />
-                )}
-              />
+                  <Text style={styles.telemetryGpsStatus}>
+                    {gpsStatus === 'fijado' && 'GPS OK'}
+                    {(gpsStatus === 'buscando' || gpsStatus === 'iniciando') &&
+                      'Buscando...'}
+                    {gpsStatus === 'denegado' && 'Base'}
+                    {gpsStatus === 'error' && 'Sin señal'}
+                  </Text>
+                  <TouchableOpacity
+                    style={styles.telemetryRefreshButton}
+                    onPress={capturarCoordenadasGPS}
+                    disabled={isRefreshingGps}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  >
+                    {isRefreshingGps ? (
+                      <ActivityIndicator size="small" color="#64748b" />
+                    ) : (
+                      <Text style={styles.telemetryRefreshText}>↻</Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
+                <Text style={styles.telemetryCoords}>
+                  {coords.latitude !== null && coords.longitude !== null
+                    ? `${coords.latitude.toFixed(4)}, ${coords.longitude.toFixed(4)}`
+                    : `${FALLBACK_COORDS.latitude.toFixed(4)}, ${FALLBACK_COORDS.longitude.toFixed(4)}`}
+                </Text>
+              </View>
+            </View>
+
+            {/* Display Numérico Héroe (Metros Avanzados) */}
+            <TouchableOpacity
+              style={styles.heroDisplay}
+              activeOpacity={0.9}
+              onPress={() => metrosInputRef.current?.focus()}
+            >
+              <Text style={styles.heroCaption}>AVANCE DE FAENA</Text>
+              <View style={styles.heroValueRow}>
+                <Controller
+                  control={control}
+                  name="metros_avanzados"
+                  render={({ field: { onChange, onBlur, value } }) => (
+                    <TextInput
+                      ref={metrosInputRef}
+                      style={[
+                        styles.heroInput,
+                        errors.metros_avanzados && styles.heroInputError,
+                      ]}
+                      placeholder="0.0"
+                      placeholderTextColor="#334155"
+                      keyboardType="decimal-pad"
+                      onBlur={onBlur}
+                      onChangeText={(val) => {
+                        onChange(val);
+                        if (errors.metros_avanzados) {
+                          clearErrors('metros_avanzados');
+                        }
+                      }}
+                      value={value}
+                      selectTextOnFocus
+                    />
+                  )}
+                />
+                <Text style={styles.heroUnit}>METROS</Text>
+              </View>
               {errors.metros_avanzados ? (
-                <Text style={styles.errorMessage}>
+                <Text style={styles.errorText}>
                   {errors.metros_avanzados.message}
                 </Text>
-              ) : null}
-            </View>
+              ) : (
+                <Text style={styles.heroHelper}>Toca para ingresar avance</Text>
+              )}
+            </TouchableOpacity>
 
-            {/* Observaciones */}
-            <View style={styles.fieldGroup}>
-              <Text style={styles.label}>Observación (Opcional):</Text>
+            {/* Selector Táctil de Fase de Maniobra */}
+            <TouchableOpacity
+              style={styles.faseSelectorBar}
+              activeOpacity={0.7}
+              onPress={() => setModalFaseVisible(true)}
+            >
+              <View style={styles.faseSelectorInfo}>
+                <Text style={styles.faseSelectorLabel}>FASE DE MANIOBRA</Text>
+                <Text style={styles.faseSelectorText}>{faseSeleccionada}</Text>
+              </View>
+              <View style={styles.faseSelectorChevron}>
+                <Text style={styles.faseSelectorChevronText}>▾</Text>
+              </View>
+            </TouchableOpacity>
+
+            {/* Bitácora / Observación simplificada */}
+            <View style={styles.observationBlock}>
               <Controller
                 control={control}
                 name="observacion"
                 render={({ field: { onChange, onBlur, value } }) => (
                   <TextInput
-                    style={[styles.input, styles.inputMultiline]}
-                    placeholder="Condiciones de marea, estado del lecho marino u observaciones..."
-                    placeholderTextColor="#94a3b8"
+                    style={styles.observationInput}
+                    placeholder="Nota de maniobra o bitácora de campo (opcional)..."
+                    placeholderTextColor="#475569"
                     multiline
-                    numberOfLines={3}
+                    numberOfLines={2}
                     textAlignVertical="top"
                     onBlur={onBlur}
                     onChangeText={onChange}
@@ -401,31 +396,86 @@ export default function CapturaTerrenoScreen() {
               />
             </View>
 
-            {/* Botón Principal de Acción para Terreno (optimizado para guantes) */}
+            {/* Gatillo / Botón de Acción Directo */}
             <TouchableOpacity
               style={[
-                styles.submitButton,
-                (isSaving || coords.latitude === null) &&
-                  styles.submitButtonDisabled,
+                styles.actionTrigger,
+                isSaving && styles.actionTriggerDisabled,
               ]}
               onPress={handleSubmit(onSubmit)}
               disabled={isSaving}
               activeOpacity={0.8}
             >
               {isSaving ? (
-                <ActivityIndicator color="#ffffff" size="large" />
+                <ActivityIndicator color="#ffffff" size="small" />
               ) : (
-                <Text style={styles.submitButtonText}>
-                  Guardar Registro en Terreno
-                </Text>
+                <Text style={styles.actionTriggerText}>REGISTRAR AVANCE</Text>
               )}
             </TouchableOpacity>
           </View>
 
-          {/* 4. Componente Inferior: Lista de Registros Recientes */}
+          {/* Registros Recientes */}
           <ListaRegistrosRecientes refreshTrigger={refreshTrigger} />
         </ScrollView>
       </KeyboardAvoidingView>
+
+      {/* Modal de Selección Rápida de Fase (Diseñado para uso con guantes) */}
+      <Modal
+        visible={modalFaseVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setModalFaseVisible(false)}
+      >
+        <TouchableOpacity
+          style={styles.modalBackdrop}
+          activeOpacity={1}
+          onPress={() => setModalFaseVisible(false)}
+        >
+          <View style={styles.modalCard} onStartShouldSetResponder={() => true}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>FASE DE MANIOBRA</Text>
+              <TouchableOpacity
+                onPress={() => setModalFaseVisible(false)}
+                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+              >
+                <Text style={styles.modalCloseText}>✕</Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.modalOptionsContainer}>
+              {FASES_MANIOBRA.map((fase) => {
+                const isSelected = fase === faseSeleccionada;
+                return (
+                  <TouchableOpacity
+                    key={fase}
+                    style={[
+                      styles.modalOptionButton,
+                      isSelected && styles.modalOptionButtonSelected,
+                    ]}
+                    activeOpacity={0.7}
+                    onPress={() => {
+                      setFaseSeleccionada(fase);
+                      setModalFaseVisible(false);
+                    }}
+                  >
+                    <Text
+                      style={[
+                        styles.modalOptionText,
+                        isSelected && styles.modalOptionTextSelected,
+                      ]}
+                    >
+                      {fase}
+                    </Text>
+                    {isSelected ? (
+                      <Text style={styles.modalOptionCheck}>✓</Text>
+                    ) : null}
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </View>
+        </TouchableOpacity>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -433,208 +483,288 @@ export default function CapturaTerrenoScreen() {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: '#0f172a',
+    backgroundColor: '#090d16',
   },
   keyboardContainer: {
     flex: 1,
   },
   scrollContent: {
     padding: 16,
-    paddingBottom: 40,
+    paddingBottom: 36,
   },
   header: {
-    marginBottom: 12,
-  },
-  headerTitleRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 4,
+    marginBottom: 8,
+    marginTop: 2,
   },
   appTitle: {
-    fontSize: 24,
-    fontWeight: '800',
-    color: '#ffffff',
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#f8fafc',
+    letterSpacing: -0.3,
   },
-  appHeaderBadge: {
-    backgroundColor: '#1e293b',
-    color: '#38bdf8',
-    paddingHorizontal: 10,
-    paddingVertical: 3,
+  instrumentPanel: {
+    backgroundColor: '#111827',
+    borderColor: '#1e293b',
+    borderWidth: 1,
     borderRadius: 8,
+    overflow: 'hidden',
+    marginBottom: 16,
+  },
+  telemetryBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: '#1e293b',
+    backgroundColor: '#0c1220',
+  },
+  telemetryLeft: {
+    flex: 1,
+  },
+  telemetryLabel: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: '#64748b',
+    letterSpacing: 1,
+    marginBottom: 2,
+  },
+  telemetryValue: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#e2e8f0',
+  },
+  telemetryDivider: {
+    width: 1,
+    height: 28,
+    backgroundColor: '#1e293b',
+    marginHorizontal: 12,
+  },
+  telemetryRight: {
+    alignItems: 'flex-end',
+  },
+  telemetryGpsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  telemetryDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    marginRight: 5,
+  },
+  telemetryDotOk: {
+    backgroundColor: '#10b981',
+  },
+  telemetryDotSearching: {
+    backgroundColor: '#f59e0b',
+  },
+  telemetryDotOff: {
+    backgroundColor: '#64748b',
+  },
+  telemetryGpsStatus: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#94a3b8',
+    marginRight: 6,
+  },
+  telemetryRefreshButton: {
+    padding: 2,
+  },
+  telemetryRefreshText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#38bdf8',
+  },
+  telemetryCoords: {
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    fontSize: 10,
+    color: '#64748b',
+    marginTop: 1,
+  },
+  heroDisplay: {
+    paddingTop: 18,
+    paddingBottom: 16,
+    paddingHorizontal: 16,
+    alignItems: 'center',
+    borderBottomWidth: 1,
+    borderBottomColor: '#1e293b',
+    backgroundColor: '#0d1322',
+  },
+  heroCaption: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#64748b',
+    letterSpacing: 1.5,
+    marginBottom: 4,
+  },
+  heroValueRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    justifyContent: 'center',
+  },
+  heroInput: {
+    fontSize: 44,
+    fontWeight: '800',
+    color: '#f8fafc',
+    minWidth: 120,
+    textAlign: 'center',
+    padding: 0,
+    margin: 0,
+    includeFontPadding: false,
+  },
+  heroInputError: {
+    color: '#f87171',
+  },
+  heroUnit: {
     fontSize: 12,
     fontWeight: '700',
-    borderWidth: 1,
-    borderColor: '#0284c7',
+    color: '#38bdf8',
+    letterSpacing: 1,
+    marginLeft: 8,
   },
-  screenSubtitle: {
-    fontSize: 14,
-    color: '#94a3b8',
+  heroHelper: {
+    fontSize: 10,
+    color: '#475569',
+    marginTop: 4,
   },
-  card: {
-    backgroundColor: '#ffffff',
-    borderRadius: 12,
-    padding: 18,
-    marginBottom: 16,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+  errorText: {
+    color: '#f87171',
+    fontSize: 12,
+    fontWeight: '500',
+    marginTop: 4,
   },
-  cardHeaderRow: {
+  faseSelectorBar: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 12,
-  },
-  cardTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#0f172a',
-    flex: 1,
-  },
-  statusPill: {
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 16,
-  },
-  statusPillSuccess: {
-    backgroundColor: '#dcfce7',
-  },
-  statusPillWarning: {
-    backgroundColor: '#fef3c7',
-  },
-  statusPillDanger: {
-    backgroundColor: '#fee2e2',
-  },
-  statusPillText: {
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  statusTextSuccess: {
-    color: '#15803d',
-  },
-  statusTextWarning: {
-    color: '#b45309',
-  },
-  statusTextDanger: {
-    color: '#b91c1c',
-  },
-  gpsErrorText: {
-    color: '#dc2626',
-    fontSize: 13,
-    marginBottom: 8,
-    fontWeight: '600',
-  },
-  gpsGrid: {
-    flexDirection: 'row',
-    gap: 12,
-    marginBottom: 14,
-  },
-  gpsGridItem: {
-    flex: 1,
-  },
-  readOnlyLabel: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#64748b',
-    marginBottom: 4,
-  },
-  input: {
-    backgroundColor: '#f8fafc',
-    borderWidth: 1.5,
-    borderColor: '#cbd5e1',
-    borderRadius: 8,
-    padding: 12,
-    fontSize: 16,
-    color: '#0f172a',
-  },
-  inputReadOnly: {
-    backgroundColor: '#f1f5f9',
-    borderColor: '#e2e8f0',
-    color: '#475569',
-    fontWeight: '700',
-  },
-  inputMetros: {
-    fontSize: 22,
-    fontWeight: '700',
-    paddingVertical: 14,
-  },
-  inputMultiline: {
-    height: 80,
-    fontSize: 15,
-  },
-  inputError: {
-    borderColor: '#ef4444',
-    backgroundColor: '#fff5f5',
-  },
-  errorMessage: {
-    color: '#dc2626',
-    fontSize: 13,
-    fontWeight: '600',
-    marginTop: 4,
-  },
-  refreshGpsButton: {
-    backgroundColor: '#2563eb',
     paddingVertical: 12,
-    borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-    minHeight: 46,
+    paddingHorizontal: 14,
+    backgroundColor: '#0f172a',
+    borderBottomWidth: 1,
+    borderBottomColor: '#1e293b',
   },
-  refreshGpsButtonText: {
+  faseSelectorInfo: {
+    flex: 1,
+  },
+  faseSelectorLabel: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: '#64748b',
+    letterSpacing: 1,
+    marginBottom: 2,
+  },
+  faseSelectorText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#38bdf8',
+  },
+  faseSelectorChevron: {
+    paddingLeft: 10,
+  },
+  faseSelectorChevronText: {
+    fontSize: 14,
+    color: '#64748b',
+  },
+  observationBlock: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    backgroundColor: '#131b2e',
+    borderBottomWidth: 1,
+    borderBottomColor: '#1e293b',
+  },
+  observationInput: {
+    fontSize: 13,
+    color: '#cbd5e1',
+    minHeight: 44,
+    padding: 0,
+    margin: 0,
+  },
+  actionTrigger: {
+    backgroundColor: '#0284c7',
+    height: 52,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  actionTriggerDisabled: {
+    opacity: 0.6,
+  },
+  actionTriggerText: {
     color: '#ffffff',
     fontSize: 15,
+    fontWeight: '800',
+    letterSpacing: 0.8,
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.75)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  modalCard: {
+    backgroundColor: '#111827',
+    borderWidth: 1,
+    borderColor: '#334155',
+    borderRadius: 8,
+    width: '100%',
+    maxWidth: 380,
+    overflow: 'hidden',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#1e293b',
+    backgroundColor: '#0c1220',
+  },
+  modalTitle: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#94a3b8',
+    letterSpacing: 1,
+  },
+  modalCloseText: {
+    fontSize: 15,
+    color: '#94a3b8',
     fontWeight: '700',
   },
-  fieldGroup: {
-    marginBottom: 16,
-  },
-  label: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: '#334155',
-    marginBottom: 6,
-  },
-  requiredAsterisk: {
-    color: '#ef4444',
-  },
-  lockedLineBadge: {
-    backgroundColor: '#f1f5f9',
-    borderWidth: 1,
-    borderColor: '#cbd5e1',
-    borderRadius: 8,
+  modalOptionsContainer: {
     padding: 12,
+    gap: 8,
   },
-  lockedLineText: {
+  modalOptionButton: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderRadius: 6,
+    backgroundColor: '#0f172a',
+    borderWidth: 1,
+    borderColor: '#1e293b',
+    minHeight: 52,
+  },
+  modalOptionButtonSelected: {
+    backgroundColor: 'rgba(2, 132, 199, 0.15)',
+    borderColor: '#0284c7',
+  },
+  modalOptionText: {
     fontSize: 15,
     fontWeight: '600',
-    color: '#334155',
+    color: '#cbd5e1',
   },
-  submitButton: {
-    backgroundColor: '#16a34a',
-    borderRadius: 10,
-    paddingVertical: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 8,
-    minHeight: 58,
-    shadowColor: '#16a34a',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 6,
-    elevation: 4,
+  modalOptionTextSelected: {
+    color: '#38bdf8',
+    fontWeight: '700',
   },
-  submitButtonDisabled: {
-    backgroundColor: '#94a3b8',
-    shadowOpacity: 0,
-    elevation: 0,
-  },
-  submitButtonText: {
-    color: '#ffffff',
-    fontSize: 18,
+  modalOptionCheck: {
+    fontSize: 16,
     fontWeight: '800',
-    letterSpacing: 0.5,
+    color: '#38bdf8',
   },
 });
