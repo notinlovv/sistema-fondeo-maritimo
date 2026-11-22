@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { obtenerRegistrosRecientes } from '../db/outbox';
-import type { RegistroLocal } from '../db/database';
+import { obtenerUltimoErrorOutbox, type RegistroLocal } from '../db/database';
 
 export interface ListaRegistrosRecientesProps {
   /** Lista opcional provista externamente */
@@ -30,7 +30,8 @@ function parseObservacion(obs: string | null): { fase: string | null; nota: stri
 
 /**
  * Despliega los últimos registros de avance guardados localmente.
- * Diseño industrial Dark/Slate minimalista con resaltado de fase de maniobra.
+ * Diseño industrial Dark/Slate minimalista con resaltado de fase de maniobra,
+ * alertas de área designada y motivos específicos de conflicto de negocio.
  */
 export function ListaRegistrosRecientes({
   registros: propRegistros,
@@ -39,23 +40,44 @@ export function ListaRegistrosRecientes({
   const [registrosLocales, setRegistrosLocales] = useState<RegistroLocal[]>(
     propRegistros ?? []
   );
+  const [erroresOutbox, setErroresOutbox] = useState<Record<string, string>>({});
+
+  const cargarErroresConflictos = useCallback(async (items: RegistroLocal[]) => {
+    const conflictos = items.filter((r) => r.estado_sync === 'conflicto');
+    if (conflictos.length === 0) return;
+
+    const nuevosErrores: Record<string, string> = {};
+    for (const item of conflictos) {
+      try {
+        const errorMsg = await obtenerUltimoErrorOutbox(item.id);
+        if (errorMsg) {
+          nuevosErrores[item.id] = errorMsg;
+        }
+      } catch (err) {
+        console.warn(`Error al consultar último error de outbox para ${item.id}:`, err);
+      }
+    }
+    setErroresOutbox((prev) => ({ ...prev, ...nuevosErrores }));
+  }, []);
 
   const cargarRegistros = useCallback(async () => {
     try {
       const items = await obtenerRegistrosRecientes(10);
       setRegistrosLocales(items);
+      cargarErroresConflictos(items);
     } catch (err) {
       console.warn('Error al cargar registros recientes:', err);
     }
-  }, []);
+  }, [cargarErroresConflictos]);
 
   useEffect(() => {
     if (propRegistros !== undefined) {
       setRegistrosLocales(propRegistros);
+      cargarErroresConflictos(propRegistros);
     } else {
       cargarRegistros();
     }
-  }, [propRegistros, refreshTrigger, cargarRegistros]);
+  }, [propRegistros, refreshTrigger, cargarRegistros, cargarErroresConflictos]);
 
   const formatearFechaHora = (isoDate: string): string => {
     try {
@@ -95,6 +117,7 @@ export function ListaRegistrosRecientes({
             const esPendiente = reg.estado_sync === 'pendiente';
             const esSincronizado = reg.estado_sync === 'sincronizado';
             const esConflicto = reg.estado_sync === 'conflicto';
+            const esFueraZona = reg.dentro_zona === 0;
             const parsedObs = parseObservacion(reg.observacion);
 
             return (
@@ -138,7 +161,7 @@ export function ListaRegistrosRecientes({
                   ) : null}
                 </View>
 
-                {/* Columna Derecha: Badge de Estado */}
+                {/* Columna Derecha: Badges de Estado y Zona */}
                 <View style={styles.itemRightCol}>
                   <View
                     style={[
@@ -162,9 +185,19 @@ export function ListaRegistrosRecientes({
                     </Text>
                   </View>
 
+                  {/* Badge destacado si el ancla/muerto fue fondeado fuera de zona */}
+                  {esFueraZona && (
+                    <View style={styles.zonaAlertaBadge}>
+                      <Text style={styles.zonaAlertaText}>
+                        Fuera de área designada
+                      </Text>
+                    </View>
+                  )}
+
+                  {/* Motivo real del rechazo devuelto por el servidor */}
                   {esConflicto && (
-                    <Text style={styles.conflictoNotice}>
-                      Requiere revisión en oficina
+                    <Text style={styles.conflictoNotice} numberOfLines={3}>
+                      {erroresOutbox[reg.id] || 'Conflicto: requiere corrección en faena'}
                     </Text>
                   )}
                 </View>
@@ -294,6 +327,7 @@ const styles = StyleSheet.create({
   },
   itemRightCol: {
     alignItems: 'flex-end',
+    maxWidth: 160,
   },
   statusBadge: {
     paddingHorizontal: 8,
@@ -326,11 +360,28 @@ const styles = StyleSheet.create({
   statusTextConflicto: {
     color: '#f87171',
   },
+  zonaAlertaBadge: {
+    backgroundColor: 'rgba(239, 68, 68, 0.15)',
+    borderColor: 'rgba(239, 68, 68, 0.45)',
+    borderWidth: 1,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    marginTop: 4,
+  },
+  zonaAlertaText: {
+    color: '#fca5a5',
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 0.2,
+    textAlign: 'right',
+  },
   conflictoNotice: {
     fontSize: 10,
     color: '#f87171',
-    fontWeight: '500',
-    marginTop: 3,
+    fontWeight: '600',
+    marginTop: 4,
     textAlign: 'right',
+    lineHeight: 13,
   },
 });

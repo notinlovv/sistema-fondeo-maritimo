@@ -46,7 +46,7 @@ export interface RegistroLocal {
   creado_en: string;
   sincronizado_en?: string | null;
   version_esquema: number; // Default: 1
-  dentro_zona?: number | null; // 1: dentro de zona, 0: fuera de zona
+  dentro_zona?: number | boolean | null; // 1: dentro de zona, 0: fuera de zona
 }
 
 /**

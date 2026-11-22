@@ -15,7 +15,7 @@ import { evaluarDentroZona } from '../utils/geoValidacion';
  * @param registro Datos del registro de avance capturados en terreno.
  */
 export const guardarRegistroYEncolar = async (
-  registro: Omit<RegistroLocal, 'estado_sync' | 'creado_en' | 'version_esquema'> & {
+  registro: Omit<RegistroLocal, 'estado_sync' | 'creado_en' | 'version_esquema' | 'dentro_zona'> & {
     dentro_zona?: number | boolean | null;
   }
 ): Promise<void> => {
@@ -25,8 +25,7 @@ export const guardarRegistroYEncolar = async (
   // Resolución de dentro_zona (1 o 0, por defecto 1 si no se provee ni se encuentra geometría)
   let dentroZonaInt: number;
   if (registro.dentro_zona !== undefined && registro.dentro_zona !== null) {
-    dentroZonaInt =
-      registro.dentro_zona === true || registro.dentro_zona === 1 ? 1 : 0;
+    dentroZonaInt = Boolean(registro.dentro_zona) ? 1 : 0;
   } else {
     try {
       const linea = await obtenerLineaCachePorId(registro.linea_id);
