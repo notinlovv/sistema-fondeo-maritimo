@@ -9,7 +9,12 @@ DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./data/fondeo.db")
 
 # El argumento check_same_thread=False es necesario en FastAPI con SQLite
 # porque FastAPI puede compartir la conexión entre distintos hilos en solicitudes concurrentes.
-connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
+# timeout=5.0 evita errores "database is locked" en escrituras concurrentes.
+connect_args = (
+    {"check_same_thread": False, "timeout": 5.0}
+    if DATABASE_URL.startswith("sqlite")
+    else {}
+)
 
 engine = create_engine(DATABASE_URL, connect_args=connect_args)
 
@@ -23,6 +28,7 @@ def set_sqlite_pragma(dbapi_connection, connection_record):
         cursor.execute("PRAGMA foreign_keys=ON")
         cursor.execute("PRAGMA journal_mode=WAL")
         cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.execute("PRAGMA busy_timeout=5000;")
         cursor.close()
 
 

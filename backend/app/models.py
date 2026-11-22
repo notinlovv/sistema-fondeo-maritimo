@@ -41,6 +41,13 @@ class LineaFondeo(Base):
     fecha_inicio = Column(DateTime, default=utc_now)
     fecha_meta = Column(DateTime)
     estado = Column(String, default="activa")  # activa, completada, pausada
+    descripcion = Column(String, nullable=True)
+    lat_inicio = Column(Float, nullable=True)
+    lon_inicio = Column(Float, nullable=True)
+    lat_muerto = Column(Float, nullable=True)
+    lon_muerto = Column(Float, nullable=True)
+    radio_tolerancia_m = Column(Float, default=50.0, nullable=True)
+    zona_designada = Column(JSON, nullable=True)
 
     registros = relationship("RegistroAvance", back_populates="linea")
 
@@ -59,6 +66,8 @@ class RegistroAvance(Base):
     longitud = Column(Float, nullable=True)
     estado = Column(String, default="pendiente")  # pendiente, sincronizado, conflicto
     observacion = Column(String, nullable=True)
+    dentro_zona = Column(Boolean, default=True, nullable=True)
+    eliminado_en = Column(DateTime, nullable=True)
 
     creado_en = Column(DateTime, default=utc_now)
     sincronizado_en = Column(DateTime, default=utc_now, onupdate=utc_now)

@@ -16,6 +16,13 @@ def _serializar_linea(linea: models.LineaFondeo) -> dict:
         "fecha_inicio": linea.fecha_inicio.isoformat() if linea.fecha_inicio else None,
         "fecha_meta": linea.fecha_meta.isoformat() if linea.fecha_meta else None,
         "estado": linea.estado,
+        "descripcion": linea.descripcion,
+        "lat_inicio": linea.lat_inicio,
+        "lon_inicio": linea.lon_inicio,
+        "lat_muerto": linea.lat_muerto,
+        "lon_muerto": linea.lon_muerto,
+        "radio_tolerancia_m": linea.radio_tolerancia_m,
+        "zona_designada": linea.zona_designada,
     }
 
 

@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, EmailStr, Field
 
@@ -37,13 +38,35 @@ class TokenData(BaseModel):
 class LineaFondeoBase(BaseModel):
     nombre: str
     metros_totales: float
-    fecha_inicio: datetime
+    fecha_inicio: datetime | None = None
     fecha_meta: datetime | None = None
     estado: str = "activa"
+    descripcion: str | None = None
+    lat_inicio: float | None = None
+    lon_inicio: float | None = None
+    lat_muerto: float | None = None
+    lon_muerto: float | None = None
+    radio_tolerancia_m: float | None = 50.0
+    zona_designada: list | None = None
 
 
 class LineaFondeoCreate(LineaFondeoBase):
     pass
+
+
+class LineaFondeoUpdate(BaseModel):
+    nombre: str | None = None
+    metros_totales: float | None = None
+    fecha_inicio: datetime | None = None
+    fecha_meta: datetime | None = None
+    estado: str | None = None
+    descripcion: str | None = None
+    lat_inicio: float | None = None
+    lon_inicio: float | None = None
+    lat_muerto: float | None = None
+    lon_muerto: float | None = None
+    radio_tolerancia_m: float | None = None
+    zona_designada: list | None = None
 
 
 class LineaFondeoResponse(LineaFondeoBase):
@@ -64,6 +87,7 @@ class RegistroAvanceBase(BaseModel):
     longitud: float | None = None
     estado: str = "pendiente"
     observacion: str | None = None
+    dentro_zona: bool | None = True
 
 
 class RegistroAvanceCreate(RegistroAvanceBase):
@@ -72,12 +96,38 @@ class RegistroAvanceCreate(RegistroAvanceBase):
     version_esquema: int | None = 1
 
 
+class RegistroAvanceUpdate(BaseModel):
+    linea_id: int | None = None
+    metros_avanzados: float | None = Field(default=None, ge=0)
+    fecha: datetime | None = None
+    latitud: float | None = None
+    longitud: float | None = None
+    observacion: str | None = None
+
+
 class RegistroAvanceResponse(RegistroAvanceBase):
     id: str
     usuario_id: int
+    dentro_zona: bool | None = True
+    eliminado_en: datetime | None = None
     creado_en: datetime
     sincronizado_en: datetime
     version_esquema: int
+
+    class Config:
+        from_attributes = True
+
+
+# --- Esquemas de Auditoría ---
+class AuditoriaResponse(BaseModel):
+    id: int
+    entidad: str
+    entidad_id: str
+    usuario_id: int | None = None
+    accion: str
+    valores_antes: Any = None
+    valores_despues: Any = None
+    fecha: datetime
 
     class Config:
         from_attributes = True

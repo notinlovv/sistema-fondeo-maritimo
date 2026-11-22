@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.routers import auth, dashboard, registros, reportes
+from app.routers import archivos, auth, dashboard, lineas, registros, reportes
 
 app = FastAPI(
     title="API Sistema de Fondeo",
@@ -21,8 +21,10 @@ app.add_middleware(
 # Incluir los enrutadores
 app.include_router(auth.router)
 app.include_router(dashboard.router)
+app.include_router(lineas.router)
 app.include_router(registros.router)
 app.include_router(reportes.router)
+app.include_router(archivos.router)
 
 
 @app.get("/")
