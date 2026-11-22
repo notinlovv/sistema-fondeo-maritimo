@@ -76,4 +76,72 @@ export const descargarReporteExcel = async (lineaId) => {
   return response.data;
 };
 
+/**
+ * Actualiza el estado y/o campos de una línea de fondeo.
+ *
+ * @param {number|string} lineaId - ID de la línea.
+ * @param {object} payload - Campos a actualizar (ej. { estado, descripcion }).
+ * @returns {Promise<object>} Línea actualizada.
+ */
+export const actualizarLinea = async (lineaId, payload) => {
+  const response = await api.patch(`/lineas/${lineaId}`, payload);
+  return response.data;
+};
+
+/**
+ * Obtiene el historial de auditoría de cambios de estado de una línea.
+ *
+ * @param {number|string} lineaId - ID de la línea.
+ * @returns {Promise<Array>} Registros de auditoría de la línea.
+ */
+export const obtenerAuditoriaLinea = async (lineaId) => {
+  const response = await api.get(`/lineas/${lineaId}/auditoria`);
+  return response.data;
+};
+
+/**
+ * Obtiene los registros de fondeo de una línea específica.
+ *
+ * @param {number|string} lineaId - ID de la línea.
+ * @returns {Promise<Array>} Lista de registros de fondeo.
+ */
+export const obtenerRegistrosPorLinea = async (lineaId) => {
+  const response = await api.get(`/registros/linea/${lineaId}`);
+  return response.data;
+};
+
+/**
+ * Actualiza un registro de fondeo específico.
+ *
+ * @param {string} uuid - UUID del registro.
+ * @param {object} payload - Datos a modificar en el registro.
+ * @returns {Promise<object>} Registro actualizado.
+ */
+export const actualizarRegistro = async (uuid, payload) => {
+  const response = await api.patch(`/registros/${uuid}`, payload);
+  return response.data;
+};
+
+/**
+ * Elimina un registro de fondeo específico.
+ *
+ * @param {string} uuid - UUID del registro a eliminar.
+ * @returns {Promise<object>} Respuesta del servidor.
+ */
+export const eliminarRegistro = async (uuid) => {
+  const response = await api.delete(`/registros/${uuid}`);
+  return response.data;
+};
+
+/**
+ * Obtiene el historial de auditoría de un registro de fondeo.
+ *
+ * @param {string} uuid - UUID del registro.
+ * @returns {Promise<Array>} Historial de auditoría del registro.
+ */
+export const obtenerAuditoriaRegistro = async (uuid) => {
+  const response = await api.get(`/registros/${uuid}/auditoria`);
+  return response.data;
+};
+
 export default api;
