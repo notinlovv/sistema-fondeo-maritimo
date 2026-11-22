@@ -46,6 +46,32 @@ export interface RegistroLocal {
   creado_en: string;
   sincronizado_en?: string | null;
   version_esquema: number; // Default: 1
+  dentro_zona?: number | null; // 1: dentro de zona, 0: fuera de zona
+}
+
+/**
+ * Representación de una línea de fondeo almacenada en caché local para validación offline.
+ */
+export interface LineaCache {
+  id: number;
+  nombre: string;
+  estado?: string | null;
+  metros_totales?: number | null;
+  lat_inicio?: number | null;
+  lon_inicio?: number | null;
+  lat_muerto?: number | null;
+  lon_muerto?: number | null;
+  radio_tolerancia_m?: number | null;
+  zona_designada?: string | null; // JSON serializado de vértices [[lat, lon], ...]
+  actualizado_en?: string | null; // ISO 8601 UTC
+}
+
+/**
+ * Metadato del motor de sincronización (cursores de pull, timestamps, etc.).
+ */
+export interface SyncMeta {
+  clave: string;
+  valor: string;
 }
 
 /**
@@ -70,6 +96,7 @@ export type NuevoRegistroLocal = Omit<RegistroLocal, 'version_esquema' | 'creado
   version_esquema?: number;
   creado_en?: string;
   sincronizado_en?: string | null;
+  dentro_zona?: number | null;
 };
 
 /**
@@ -83,7 +110,7 @@ export type NuevoOutboxItem = Omit<OutboxItem, 'id' | 'reintentos' | 'ultimo_err
 
 /**
  * Inicializa la base de datos local de manera idempotente creando las tablas
- * e índices requeridos si no existen.
+ * e índices requeridos si no existen y aplicando migraciones seguras sin pérdida de datos.
  */
 export const initDB = (): void => {
   try {
@@ -116,7 +143,27 @@ export const initDB = (): void => {
         estado_sync TEXT DEFAULT 'pendiente',
         creado_en TEXT NOT NULL,
         sincronizado_en TEXT,
-        version_esquema INTEGER DEFAULT 1
+        version_esquema INTEGER DEFAULT 1,
+        dentro_zona INTEGER DEFAULT 1
+      );
+
+      CREATE TABLE IF NOT EXISTS lineas_cache (
+        id INTEGER PRIMARY KEY,
+        nombre TEXT NOT NULL,
+        estado TEXT,
+        metros_totales REAL,
+        lat_inicio REAL,
+        lon_inicio REAL,
+        lat_muerto REAL,
+        lon_muerto REAL,
+        radio_tolerancia_m REAL DEFAULT 50.0,
+        zona_designada TEXT,
+        actualizado_en TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS sync_meta (
+        clave TEXT PRIMARY KEY,
+        valor TEXT
       );
 
       CREATE TABLE IF NOT EXISTS outbox (
@@ -132,7 +179,9 @@ export const initDB = (): void => {
       );
 
       CREATE INDEX IF NOT EXISTS idx_outbox_estado_creado_en ON outbox (estado, creado_en);
+      CREATE INDEX IF NOT EXISTS idx_outbox_uuid ON outbox (uuid);
       CREATE INDEX IF NOT EXISTS idx_registros_locales_linea_fecha ON registros_locales (linea_id, fecha);
+      CREATE INDEX IF NOT EXISTS idx_lineas_cache_id ON lineas_cache (id);
 
       -- Tabla auxiliar para compatibilidad con pantallas prototipo anteriores
       CREATE TABLE IF NOT EXISTS registros_avance (
@@ -148,11 +197,114 @@ export const initDB = (): void => {
       );
     `);
 
+    // Migración idempotente para asegurar columna 'dentro_zona' en instalaciones preexistentes
+    try {
+      db.execSync('ALTER TABLE registros_locales ADD COLUMN dentro_zona INTEGER DEFAULT 1;');
+    } catch {
+      // Ignorar error si la columna ya existe en registros_locales
+    }
+
     console.log('Base de datos local SQLite inicializada exitosamente');
   } catch (error) {
     console.error('Error al inicializar la base de datos local SQLite:', error);
     throw error;
   }
+};
+
+/**
+ * Guarda o actualiza un arreglo de líneas de fondeo en la tabla local lineas_cache.
+ */
+export const guardarLineasCache = async (lineas: LineaCache[]): Promise<void> => {
+  if (!lineas || lineas.length === 0) return;
+  const database = getDB();
+  await database.withTransactionAsync(async () => {
+    for (const l of lineas) {
+      await database.runAsync(
+        `INSERT OR REPLACE INTO lineas_cache (
+          id,
+          nombre,
+          estado,
+          metros_totales,
+          lat_inicio,
+          lon_inicio,
+          lat_muerto,
+          lon_muerto,
+          radio_tolerancia_m,
+          zona_designada,
+          actualizado_en
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          l.id,
+          l.nombre,
+          l.estado ?? null,
+          l.metros_totales ?? null,
+          l.lat_inicio ?? null,
+          l.lon_inicio ?? null,
+          l.lat_muerto ?? null,
+          l.lon_muerto ?? null,
+          l.radio_tolerancia_m ?? 50.0,
+          l.zona_designada ?? null,
+          l.actualizado_en ?? new Date().toISOString(),
+        ]
+      );
+    }
+  });
+};
+
+/**
+ * Obtiene todas las líneas de fondeo cacheadas localmente.
+ */
+export const obtenerLineasCache = async (): Promise<LineaCache[]> => {
+  const database = getDB();
+  return await database.getAllAsync<LineaCache>(
+    'SELECT * FROM lineas_cache ORDER BY id ASC'
+  );
+};
+
+/**
+ * Obtiene una línea de fondeo de la caché local por su ID.
+ */
+export const obtenerLineaCachePorId = async (id: number): Promise<LineaCache | null> => {
+  const database = getDB();
+  return await database.getFirstAsync<LineaCache>(
+    'SELECT * FROM lineas_cache WHERE id = ?',
+    [id]
+  );
+};
+
+/**
+ * Obtiene el último error registrado en el outbox para un UUID específico.
+ */
+export const obtenerUltimoErrorOutbox = async (uuid: string): Promise<string | null> => {
+  const database = getDB();
+  const row = await database.getFirstAsync<{ ultimo_error: string | null }>(
+    'SELECT ultimo_error FROM outbox WHERE uuid = ? ORDER BY id DESC LIMIT 1',
+    [uuid]
+  );
+  return row?.ultimo_error ?? null;
+};
+
+/**
+ * Obtiene el valor de una clave en sync_meta (ej: 'ultima_sincronizacion_pull').
+ */
+export const obtenerMetaSync = async (clave: string): Promise<string | null> => {
+  const database = getDB();
+  const row = await database.getFirstAsync<{ valor: string }>(
+    'SELECT valor FROM sync_meta WHERE clave = ?',
+    [clave]
+  );
+  return row?.valor ?? null;
+};
+
+/**
+ * Guarda o actualiza un valor de metadato en sync_meta.
+ */
+export const guardarMetaSync = async (clave: string, valor: string): Promise<void> => {
+  const database = getDB();
+  await database.runAsync(
+    'INSERT OR REPLACE INTO sync_meta (clave, valor) VALUES (?, ?)',
+    [clave, valor]
+  );
 };
 
 export default db;

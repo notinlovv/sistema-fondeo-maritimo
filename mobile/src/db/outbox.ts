@@ -1,4 +1,10 @@
-import { getDB, type OutboxItem, type RegistroLocal } from './database';
+import {
+  getDB,
+  obtenerLineaCachePorId,
+  type OutboxItem,
+  type RegistroLocal,
+} from './database';
+import { evaluarDentroZona } from '../utils/geoValidacion';
 
 /**
  * Persiste de forma atómica un registro de avance local y encola su evento correspondiente
@@ -9,10 +15,23 @@ import { getDB, type OutboxItem, type RegistroLocal } from './database';
  * @param registro Datos del registro de avance capturados en terreno.
  */
 export const guardarRegistroYEncolar = async (
-  registro: Omit<RegistroLocal, 'estado_sync' | 'creado_en' | 'version_esquema'>
+  registro: Omit<RegistroLocal, 'estado_sync' | 'creado_en' | 'version_esquema'> & {
+    dentro_zona?: number | null;
+  }
 ): Promise<void> => {
   const db = getDB();
   const creadoEn = new Date().toISOString();
+
+  // Si no se proporcionó dentro_zona explícito, se valida contra lineas_cache
+  let dentroZonaVal = registro.dentro_zona;
+  if (dentroZonaVal === undefined || dentroZonaVal === null) {
+    try {
+      const linea = await obtenerLineaCachePorId(registro.linea_id);
+      dentroZonaVal = evaluarDentroZona(linea, registro.latitud, registro.longitud) ? 1 : 0;
+    } catch {
+      dentroZonaVal = 1;
+    }
+  }
 
   // Payload que espera la API del backend en el endpoint PUT /registros/{uuid}
   const payload = JSON.stringify({
@@ -25,6 +44,7 @@ export const guardarRegistroYEncolar = async (
     longitud: registro.longitud,
     estado: registro.estado || 'activa',
     observacion: registro.observacion ?? null,
+    dentro_zona: Boolean(dentroZonaVal),
     version_esquema: 1,
   });
 
@@ -44,8 +64,9 @@ export const guardarRegistroYEncolar = async (
         estado_sync,
         creado_en,
         sincronizado_en,
-        version_esquema
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        version_esquema,
+        dentro_zona
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         registro.id,
         registro.linea_id,
@@ -60,6 +81,7 @@ export const guardarRegistroYEncolar = async (
         creadoEn,
         registro.sincronizado_en ?? null,
         1,
+        dentroZonaVal,
       ]
     );
 
@@ -138,14 +160,14 @@ export const marcarOutboxCompletado = async (uuid: string): Promise<void> => {
 
 /**
  * Registra un fallo durante la sincronización de un evento outbox:
- * - Si es conflicto (409 Conflict): marca `estado_sync = 'conflicto'` en `registros_locales`
- *   y `estado = 'conflicto'` en `outbox` con el detalle del error.
- * - Si es un error transitorio de red: incrementa el contador `reintentos`, actualiza
- *   `ultimo_error` y establece `estado = 'fallido'` para que el worker reintente posteriormente.
+ * - Si es conflicto o error de regla de negocio (400, 409, 422): marca `estado_sync = 'conflicto'`
+ *   en `registros_locales` y `estado = 'conflicto'` en `outbox` con el detalle del error.
+ * - Si es un error transitorio de red o 500: incrementa el contador `reintentos`, actualiza
+ *   `ultimo_error` y establece `estado = 'fallido'` para reintento posterior.
  *
  * @param uuid Identificador único (UUID) del registro con error.
  * @param errorMsg Mensaje o detalle del error ocurrido.
- * @param esConflicto Indica si el backend rechazó la operación por conflicto de versiones o validación de negocio.
+ * @param esConflicto Indica si el backend rechazó la operación por conflicto o validación de negocio definitiva.
  */
 export const marcarOutboxError = async (
   uuid: string,
@@ -207,12 +229,10 @@ export const obtenerRegistrosRecientes = async (limite = 10): Promise<RegistroLo
   const db = getDB();
   return await db.getAllAsync<RegistroLocal>(
     `SELECT id, linea_id, usuario_id, metros_avanzados, fecha, latitud, longitud,
-            estado, observacion, estado_sync, creado_en, sincronizado_en, version_esquema
+            estado, observacion, estado_sync, creado_en, sincronizado_en, version_esquema, dentro_zona
      FROM registros_locales
      ORDER BY creado_en DESC
      LIMIT ?`,
     [limite]
   );
 };
-
-

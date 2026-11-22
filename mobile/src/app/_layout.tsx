@@ -32,7 +32,7 @@ export default function RootLayout() {
       <Stack.Screen 
         name="explore" 
         options={{ 
-          title: 'Captura en Terreno',
+          title: 'Diagnóstico',
           headerShown: false,
           headerBackVisible: false,
           gestureEnabled: false
