@@ -16,20 +16,23 @@ import { evaluarDentroZona } from '../utils/geoValidacion';
  */
 export const guardarRegistroYEncolar = async (
   registro: Omit<RegistroLocal, 'estado_sync' | 'creado_en' | 'version_esquema'> & {
-    dentro_zona?: number | null;
+    dentro_zona?: number | boolean | null;
   }
 ): Promise<void> => {
   const db = getDB();
   const creadoEn = new Date().toISOString();
 
-  // Si no se proporcionó dentro_zona explícito, se valida contra lineas_cache
-  let dentroZonaVal = registro.dentro_zona;
-  if (dentroZonaVal === undefined || dentroZonaVal === null) {
+  // Resolución de dentro_zona (1 o 0, por defecto 1 si no se provee ni se encuentra geometría)
+  let dentroZonaInt: number;
+  if (registro.dentro_zona !== undefined && registro.dentro_zona !== null) {
+    dentroZonaInt =
+      registro.dentro_zona === true || registro.dentro_zona === 1 ? 1 : 0;
+  } else {
     try {
       const linea = await obtenerLineaCachePorId(registro.linea_id);
-      dentroZonaVal = evaluarDentroZona(linea, registro.latitud, registro.longitud) ? 1 : 0;
+      dentroZonaInt = evaluarDentroZona(linea, registro.latitud, registro.longitud) ? 1 : 0;
     } catch {
-      dentroZonaVal = 1;
+      dentroZonaInt = 1;
     }
   }
 
@@ -44,12 +47,12 @@ export const guardarRegistroYEncolar = async (
     longitud: registro.longitud,
     estado: registro.estado || 'activa',
     observacion: registro.observacion ?? null,
-    dentro_zona: Boolean(dentroZonaVal),
+    dentro_zona: dentroZonaInt === 1,
     version_esquema: 1,
   });
 
   await db.withTransactionAsync(async () => {
-    // 1. Inserción en la tabla de almacenamiento local de avances
+    // 1. Inserción atómica en la tabla local registros_locales
     await db.runAsync(
       `INSERT INTO registros_locales (
         id,
@@ -81,11 +84,11 @@ export const guardarRegistroYEncolar = async (
         creadoEn,
         registro.sincronizado_en ?? null,
         1,
-        dentroZonaVal,
+        dentroZonaInt,
       ]
     );
 
-    // 2. Inserción en la cola Transactional Outbox
+    // 2. Inserción atómica en la cola Transactional Outbox
     await db.runAsync(
       `INSERT INTO outbox (
         uuid,

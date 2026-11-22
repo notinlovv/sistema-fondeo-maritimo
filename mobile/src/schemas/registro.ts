@@ -18,6 +18,7 @@ export const registroSchema = z.object({
     .max(500, 'La observación no puede superar los 500 caracteres')
     .nullable()
     .optional(),
+  dentro_zona: z.union([z.number(), z.boolean()]).optional(),
 });
 
 /**
