@@ -11,6 +11,9 @@ from app import auth, config, database, models, schemas
 
 router = APIRouter(prefix="/registros", tags=["Archivos Adjuntos"])
 
+MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
+EXTENSIONES_PERMITIDAS = {".jpg", ".jpeg", ".png", ".webp", ".pdf"}
+
 
 @router.post(
     "/{uuid}/archivos",
@@ -27,8 +30,8 @@ def subir_archivo_adjunto(
 ):
     """
     Recibe un archivo mediante multipart/form-data asociado a un registro de avance,
-    lo almacena físicamente en UPLOAD_DIR (por defecto data/archivos/) y guarda sus
-    metadatos en la tabla `archivos`.
+    valida extensión permitida y tamaño máximo (10 MB), lo almacena físicamente
+    en UPLOAD_DIR (por defecto data/archivos/) y guarda sus metadatos en la tabla `archivos`.
     """
     registro = (
         db.query(models.RegistroAvance)
@@ -41,17 +44,40 @@ def subir_archivo_adjunto(
             detail=f"El registro de avance con UUID '{uuid}' no existe",
         )
 
+    nombre_original = os.path.basename(file.filename or "adjunto.bin")
+    ext = Path(nombre_original).suffix.lower()
+    if ext not in EXTENSIONES_PERMITIDAS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Extensión '{ext}' no permitida. "
+                f"Formatos válidos: {', '.join(sorted(EXTENSIONES_PERMITIDAS))}"
+            ),
+        )
+
     directorio_subidas = Path(config.UPLOAD_DIR)
     directorio_subidas.mkdir(parents=True, exist_ok=True)
 
-    nombre_original = os.path.basename(file.filename or "adjunto.bin")
     prefijo_unico = uuid_lib.uuid4().hex[:8]
     nombre_archivo = f"{uuid}_{prefijo_unico}_{nombre_original}"
     ruta_destino = directorio_subidas / nombre_archivo
 
+    tamano_bytes = 0
     try:
         with ruta_destino.open("wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+            while chunk := file.file.read(1024 * 1024):  # Chunks de 1 MB
+                tamano_bytes += len(chunk)
+                if tamano_bytes > MAX_FILE_SIZE:
+                    buffer.close()
+                    if ruta_destino.exists():
+                        ruta_destino.unlink()
+                    raise HTTPException(
+                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                        detail="El archivo excede el tamaño máximo permitido de 10 MB",
+                    )
+                buffer.write(chunk)
+    except HTTPException:
+        raise
     except OSError as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -60,7 +86,6 @@ def subir_archivo_adjunto(
     finally:
         file.file.close()
 
-    tamano_bytes = ruta_destino.stat().st_size
     tipo_mime = file.content_type or "application/octet-stream"
     ruta_guardada = str(ruta_destino)
 

@@ -101,14 +101,25 @@ def crear_linea(
     return nueva_linea
 
 
+ESTADOS_VALIDOS_LINEA = {
+    "activa",
+    "pausada",
+    "completada",
+    "mantencion",
+    "fuera_de_posicion",
+}
+
+
 @router.patch("/{linea_id}", response_model=schemas.LineaFondeoResponse)
 def actualizar_linea(
     linea_id: int,
     linea_in: schemas.LineaFondeoUpdate,
     db: Session = Depends(database.get_db),
-    current_user: models.Usuario = Depends(auth.require_role(["admin", "gerente"])),
+    current_user: models.Usuario = Depends(
+        auth.require_role(["supervisor", "gerente", "admin"])
+    ),
 ):
-    """Actualiza parcialmente una línea de fondeo (restringido a roles admin y gerente)."""
+    """Actualiza parcialmente una línea de fondeo (roles supervisor, gerente y admin)."""
     linea = (
         db.query(models.LineaFondeo).filter(models.LineaFondeo.id == linea_id).first()
     )
@@ -121,6 +132,16 @@ def actualizar_linea(
     cambios = linea_in.model_dump(exclude_unset=True)
     if not cambios:
         return linea
+
+    if "estado" in cambios and cambios["estado"] is not None:
+        if cambios["estado"] not in ESTADOS_VALIDOS_LINEA:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"Estado inválido '{cambios['estado']}'. "
+                    f"Debe pertenecer a: {', '.join(sorted(ESTADOS_VALIDOS_LINEA))}"
+                ),
+            )
 
     if "nombre" in cambios and cambios["nombre"] != linea.nombre:
         duplicada = (
@@ -142,7 +163,10 @@ def actualizar_linea(
             db.query(
                 func.coalesce(func.sum(models.RegistroAvance.metros_avanzados), 0.0)
             )
-            .filter(models.RegistroAvance.linea_id == linea_id)
+            .filter(
+                models.RegistroAvance.linea_id == linea_id,
+                models.RegistroAvance.eliminado_en.is_(None),
+            )
             .scalar()
             or 0.0
         )
@@ -174,3 +198,48 @@ def actualizar_linea(
     db.commit()
     db.refresh(linea)
     return linea
+
+
+@router.get(
+    "/{linea_id}/auditoria",
+    response_model=list[schemas.AuditoriaResponse],
+    dependencies=[Depends(auth.require_role(["supervisor", "gerente", "admin"]))],
+)
+def consultar_auditoria_linea(
+    linea_id: int,
+    db: Session = Depends(database.get_db),
+):
+    """Consulta el historial de auditoría de una línea de fondeo ordenado por fecha descendente."""
+    linea = (
+        db.query(models.LineaFondeo).filter(models.LineaFondeo.id == linea_id).first()
+    )
+    if not linea:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Línea de fondeo con ID {linea_id} no encontrada",
+        )
+
+    rows = (
+        db.query(models.Auditoria, models.Usuario.nombre)
+        .outerjoin(models.Usuario, models.Auditoria.usuario_id == models.Usuario.id)
+        .filter(
+            models.Auditoria.entidad.in_(["lineas_fondeo", "LineaFondeo"]),
+            models.Auditoria.entidad_id == str(linea_id),
+        )
+        .order_by(models.Auditoria.fecha.desc())
+        .all()
+    )
+    return [
+        schemas.AuditoriaResponse(
+            id=audit.id,
+            entidad=audit.entidad,
+            entidad_id=audit.entidad_id,
+            usuario_id=audit.usuario_id,
+            usuario_nombre=nombre_usuario,
+            accion=audit.accion,
+            valores_antes=audit.valores_antes,
+            valores_despues=audit.valores_despues,
+            fecha=audit.fecha,
+        )
+        for audit, nombre_usuario in rows
+    ]

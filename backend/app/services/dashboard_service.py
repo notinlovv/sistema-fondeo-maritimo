@@ -243,10 +243,15 @@ class DashboardService:
 
         registros = (
             db.query(models.RegistroAvance)
-            .filter(models.RegistroAvance.linea_id == linea.id)
+            .filter(
+                models.RegistroAvance.linea_id == linea.id,
+                models.RegistroAvance.eliminado_en.is_(None),
+            )
             .order_by(models.RegistroAvance.fecha.asc())
             .all()
         )
+
+        registros_fuera_zona = sum(1 for r in registros if r.dentro_zona is False)
 
         metricas = cls.calcular_metricas_base(linea=linea, registros=registros)
         promedio_7d, dias_estimados, fecha_estimada = cls.calcular_proyeccion_7d(
@@ -280,6 +285,7 @@ class DashboardService:
             meta_lineal_esperada=meta_lineal,
             desfase_porcentual=desfase,
             mensaje_desviacion=mensaje,
+            registros_fuera_zona=registros_fuera_zona,
             serie_temporal=serie_temporal,
         )
 

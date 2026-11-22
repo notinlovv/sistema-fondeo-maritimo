@@ -102,7 +102,10 @@ class ReporteService:
 
         registros = (
             db.query(models.RegistroAvance)
-            .filter(models.RegistroAvance.linea_id == linea.id)
+            .filter(
+                models.RegistroAvance.linea_id == linea.id,
+                models.RegistroAvance.eliminado_en.is_(None),
+            )
             .order_by(models.RegistroAvance.fecha.asc())
             .all()
         )
@@ -256,6 +259,7 @@ class ReporteService:
             "Metros Avanzados",
             "Metros Acumulados",
             "Coordenadas (Lat, Lon)",
+            "En Área Designada",
             "Observación",
         ]
 
@@ -284,6 +288,7 @@ class ReporteService:
                     if (r.latitud is not None and r.longitud is not None)
                     else "Sin GPS"
                 )
+                dentro_str = "Sí" if r.dentro_zona is not False else "FUERA DE ZONA"
                 obs_str = r.observacion or "-"
 
                 row_vals = [
@@ -292,6 +297,7 @@ class ReporteService:
                     float(r.metros_avanzados),
                     acumulado_running,
                     coords_str,
+                    dentro_str,
                     obs_str,
                 ]
 
@@ -308,14 +314,16 @@ class ReporteService:
                         cell.alignment = Alignment(
                             horizontal="right", vertical="center"
                         )
-                    elif col_idx in (1, 5):
+                    elif col_idx in (1, 5, 6):
                         cell.alignment = Alignment(
                             horizontal="center", vertical="center"
                         )
+                        if col_idx == 6 and val == "FUERA DE ZONA":
+                            cell.font = Font(name="Calibri", size=10, bold=True, color="B42318")
                     else:
                         cell.alignment = Alignment(horizontal="left", vertical="center")
         else:
-            ws_bitacora.append(["Sin registros de avance", "-", 0.0, 0.0, "-", "-"])
+            ws_bitacora.append(["Sin registros de avance", "-", 0.0, 0.0, "-", "-", "-"])
 
         # Ajuste dinámico de ancho de columnas
         for ws in [ws_resumen, ws_bitacora]:
@@ -505,6 +513,7 @@ class ReporteService:
             Paragraph("<b>Metros</b>", cell_bold),
             Paragraph("<b>Acumulado</b>", cell_bold),
             Paragraph("<b>GPS (Lat, Lon)</b>", cell_bold),
+            Paragraph("<b>En Área Designada</b>", cell_bold),
             Paragraph("<b>Supervisor</b>", cell_bold),
             Paragraph("<b>Observación</b>", cell_bold),
         ]
@@ -526,6 +535,12 @@ class ReporteService:
                     if (r.latitud is not None and r.longitud is not None)
                     else "Sin GPS"
                 )
+                dentro_html = (
+                    "<font color='#B42318'><b>FUERA DE ZONA</b></font>"
+                    if r.dentro_zona is False
+                    else "Sí"
+                )
+                dentro_p = Paragraph(dentro_html, cell_style)
                 obs_p = Paragraph(r.observacion or "-", cell_style)
 
                 bitacora_rows.append(
@@ -534,6 +549,7 @@ class ReporteService:
                         Paragraph(f"{float(r.metros_avanzados):,.2f} m", cell_style),
                         Paragraph(f"{acumulado_calc:,.2f} m", cell_style),
                         Paragraph(gps_str, cell_style),
+                        dentro_p,
                         Paragraph(sup_nombre, cell_style),
                         obs_p,
                     ]
@@ -547,13 +563,14 @@ class ReporteService:
                     Paragraph("-", cell_style),
                     Paragraph("-", cell_style),
                     Paragraph("-", cell_style),
+                    Paragraph("-", cell_style),
                 ]
             )
 
         # Ancho total: 540 pt (coincide exactamente con el margen imprimible)
         table_bitacora = Table(
             bitacora_rows,
-            colWidths=[80, 60, 65, 95, 100, 140],
+            colWidths=[70, 50, 55, 80, 80, 85, 120],
             repeatRows=1,
         )
 

@@ -124,6 +124,7 @@ class AuditoriaResponse(BaseModel):
     entidad: str
     entidad_id: str
     usuario_id: int | None = None
+    usuario_nombre: str | None = None
     accion: str
     valores_antes: Any = None
     valores_despues: Any = None
@@ -168,6 +169,7 @@ class DashboardResumenResponse(BaseModel):
     meta_lineal_esperada: float | None = None
     desfase_porcentual: float | None = None
     mensaje_desviacion: str | None = None
+    registros_fuera_zona: int = 0
     serie_temporal: list[SerieTemporalPunto] = Field(default_factory=list)
 
     class Config:
