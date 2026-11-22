@@ -16,8 +16,14 @@ import {
 import {
   descargarReporteExcel,
   obtenerLineas,
+  obtenerRegistrosPorLinea,
   obtenerResumenDashboard,
 } from './api';
+import {
+  GestionRegistros,
+  MapaFondeo,
+  ModalEstadoLinea,
+} from './components';
 
 // --- Iconos SVG Inline reutilizables (sin dependencias adicionales) ---
 const AlertTriangleIcon = ({ size = 22, color = '#dc2626' }) => (
@@ -120,6 +126,11 @@ const DEMO_LINEAS = [
     fecha_inicio: '2026-10-01T08:00:00Z',
     fecha_meta: '2026-11-20T18:00:00Z',
     estado: 'activa',
+    lat_inicio: -39.863,
+    lon_inicio: -73.423,
+    lat_muerto: -39.867,
+    lon_muerto: -73.428,
+    radio_tolerancia_m: 60,
   },
   {
     id: 2,
@@ -128,8 +139,70 @@ const DEMO_LINEAS = [
     fecha_inicio: '2026-09-15T08:00:00Z',
     fecha_meta: '2026-11-01T18:00:00Z',
     estado: 'activa',
+    lat_inicio: -39.869,
+    lon_inicio: -73.431,
+    lat_muerto: -39.873,
+    lon_muerto: -73.436,
+    radio_tolerancia_m: 50,
   },
 ];
+
+const DEMO_REGISTROS = {
+  1: [
+    {
+      id: 101,
+      uuid: 'uuid-reg-101',
+      fecha: '2026-11-05T14:30:00Z',
+      metros_avanzados: 150.0,
+      latitud: -39.8655,
+      longitud: -73.4262,
+      dentro_zona: true,
+      observacion: 'Instalación de tramo fondeo con mar calma',
+    },
+    {
+      id: 102,
+      uuid: 'uuid-reg-102',
+      fecha: '2026-11-02T16:00:00Z',
+      metros_avanzados: 230.0,
+      latitud: -39.8668,
+      longitud: -73.4275,
+      dentro_zona: true,
+      observacion: 'Tendido continuo cuadrilla B',
+    },
+    {
+      id: 103,
+      uuid: 'uuid-reg-103',
+      fecha: '2026-10-31T11:15:00Z',
+      metros_avanzados: 190.0,
+      latitud: -39.8682,
+      longitud: -73.429,
+      dentro_zona: false,
+      observacion: 'Muerto desplazado 65m por corrientes de marea',
+    },
+  ],
+  2: [
+    {
+      id: 201,
+      uuid: 'uuid-reg-201',
+      fecha: '2026-11-05T10:00:00Z',
+      metros_avanzados: 85.0,
+      latitud: -39.874,
+      longitud: -73.438,
+      dentro_zona: false,
+      observacion: 'Posición fuera del radio de tolerancia de concesión',
+    },
+    {
+      id: 202,
+      uuid: 'uuid-reg-202',
+      fecha: '2026-11-03T11:30:00Z',
+      metros_avanzados: 85.0,
+      latitud: -39.8725,
+      longitud: -73.4355,
+      dentro_zona: false,
+      observacion: 'Fondeo de muerto en sector con pendiente rocosa',
+    },
+  ],
+};
 
 const DEMO_RESUMENES = {
   1: {
@@ -147,6 +220,7 @@ const DEMO_RESUMENES = {
     severidad_desviacion: null,
     meta_lineal_esperada: 1420.0,
     desfase_porcentual: 3.49,
+    registros_fuera_zona: 1,
     mensaje_desviacion:
       'El avance se encuentra dentro del margen de tolerancia planificado.',
     serie_temporal: [
@@ -175,6 +249,7 @@ const DEMO_RESUMENES = {
     severidad_desviacion: 'ALTA',
     meta_lineal_esperada: 2150.0,
     desfase_porcentual: 57.21,
+    registros_fuera_zona: 2,
     mensaje_desviacion:
       'Desviación detectada: avance real (920.0 m) con desfase del 57.2% respecto a la meta esperada (2150.0 m). La fecha estimada supera la fecha meta planificada.',
     serie_temporal: [
@@ -280,6 +355,8 @@ function Dashboard({ onLogout }) {
   const [lineas, setLineas] = useState([]);
   const [lineaSeleccionada, setLineaSeleccionada] = useState(null);
   const [datos, setDatos] = useState(null); // Resumen del dashboard
+  const [registrosLinea, setRegistrosLinea] = useState([]); // Registros individuales de la línea
+  const [lineaModalEstado, setLineaModalEstado] = useState(null); // Línea seleccionada para cambiar estado
   const [cargando, setCargando] = useState(false);
   const [cargandoLineas, setCargandoLineas] = useState(true);
   const [error, setError] = useState(null);
@@ -318,6 +395,7 @@ function Dashboard({ onLogout }) {
       const targetId = lineaIdInicial || DEMO_LINEAS[0].id;
       setLineaSeleccionada(targetId);
       setDatos(DEMO_RESUMENES[targetId] || DEMO_RESUMENES[1]);
+      setRegistrosLinea(DEMO_REGISTROS[targetId] || []);
       setCargando(false);
       setCargandoLineas(false);
     },
@@ -342,9 +420,15 @@ function Dashboard({ onLogout }) {
         setLineaSeleccionada(initialTargetId);
 
         setCargando(true);
-        const resumenData = await obtenerResumenDashboard(initialTargetId);
+        const [resumenData, registrosData] = await Promise.all([
+          obtenerResumenDashboard(initialTargetId),
+          initialTargetId
+            ? obtenerRegistrosPorLinea(initialTargetId).catch(() => [])
+            : Promise.resolve([]),
+        ]);
         if (!activo) return;
         setDatos(resumenData);
+        setRegistrosLinea(Array.isArray(registrosData) ? registrosData : []);
         if (resumenData?.linea_id && initialTargetId === '') {
           setLineaSeleccionada(resumenData.linea_id);
         }
@@ -373,12 +457,13 @@ function Dashboard({ onLogout }) {
     };
   }, [handleApiError, activarModoDemo]);
 
-  // 2. Recargar el resumen del dashboard según la línea seleccionada
+  // 2. Recargar el resumen del dashboard y registros según la línea seleccionada
   const recargarMetricas = useCallback(
     async (lineaId) => {
       if (isDemoMode) {
         if (lineaId && DEMO_RESUMENES[lineaId]) {
           setDatos(DEMO_RESUMENES[lineaId]);
+          setRegistrosLinea(DEMO_REGISTROS[lineaId] || []);
         }
         return;
       }
@@ -386,8 +471,14 @@ function Dashboard({ onLogout }) {
       setCargando(true);
       setError(null);
       try {
-        const resumenData = await obtenerResumenDashboard(lineaId);
+        const [resumenData, registrosData] = await Promise.all([
+          obtenerResumenDashboard(lineaId),
+          lineaId
+            ? obtenerRegistrosPorLinea(lineaId).catch(() => [])
+            : Promise.resolve([]),
+        ]);
         setDatos(resumenData);
+        setRegistrosLinea(Array.isArray(registrosData) ? registrosData : []);
         // Si no había línea seleccionada y el backend asignó una por defecto, sincronizar el selector
         if (resumenData?.linea_id && (lineaId === null || lineaId === undefined || lineaId === '')) {
           setLineaSeleccionada(resumenData.linea_id);
@@ -395,7 +486,7 @@ function Dashboard({ onLogout }) {
       } catch (err) {
         handleApiError(
           err,
-          'Error al sincronizar el resumen gerencial de la línea de fondeo.'
+          'Error al sincronizar el resumen gerencial y los registros de la línea.'
         );
       } finally {
         setCargando(false);
@@ -710,6 +801,33 @@ function Dashboard({ onLogout }) {
             )}
 
             {/* ======================================================== */}
+            {/* ALERTA DE RIESGO DE MULTA: MUERTO FUERA DE ÁREA         */}
+            {/* ======================================================== */}
+            {Number(datos?.registros_fuera_zona) > 0 && (
+              <section style={styles.alertConcesionBanner} role="alert" aria-live="polite">
+                <div style={styles.alertConcesionIconCircle}>
+                  <AlertTriangleIcon size={24} color="#ffffff" />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={styles.alertHeaderRow}>
+                    <h2 style={styles.alertConcesionHeading}>
+                      Alerta de Concesión Marítima: {datos.registros_fuera_zona}{' '}
+                      {datos.registros_fuera_zona === 1
+                        ? 'registro con muerto/ancla fuera del área autorizada'
+                        : 'registros con muerto/ancla fuera del área autorizada'}
+                    </h2>
+                    <span style={styles.concesionSeverityBadge}>
+                      Riesgo de Multa
+                    </span>
+                  </div>
+                  <p style={styles.alertConcesionMessage}>
+                    Se han detectado posiciones de fondeo fuera del polígono o radio de tolerancia de la concesión para la línea {datos.nombre_linea}. Esto constituye un riesgo de sanciones y multas de la autoridad marítima. Revisa los marcadores en rojo pulsante en el mapa náutico y la bitácora individual de registros.
+                  </p>
+                </div>
+              </section>
+            )}
+
+            {/* ======================================================== */}
             {/* TARJETAS DE KPIS GERENCIALES (MÉTRICAS CLAVE)            */}
             {/* ======================================================== */}
             <section style={styles.kpiGrid}>
@@ -835,6 +953,32 @@ function Dashboard({ onLogout }) {
                   </strong>
                 </div>
               </KpiCard>
+            </section>
+
+            {/* ======================================================== */}
+            {/* SUPERVISIÓN CARTOGRÁFICA Y NÁUTICA (MAPA DE FONDEO)     */}
+            {/* ======================================================== */}
+            <section style={styles.chartCard}>
+              <div style={styles.chartHeader}>
+                <div>
+                  <h2 style={styles.chartTitle}>
+                    Supervisión Cartográfica y Posicionamiento de Fondeo
+                  </h2>
+                  <p style={styles.chartSubtitle}>
+                    Monitoreo en tiempo real de líneas, zonas de concesión marítima autorizadas y anclas con capa náutica OpenSeaMap
+                  </p>
+                </div>
+                <span style={styles.countBadge}>
+                  {lineas.length} {lineas.length === 1 ? 'línea' : 'líneas'} en faena
+                </span>
+              </div>
+
+              <MapaFondeo
+                lineas={lineas}
+                lineaSeleccionadaId={lineaSeleccionada}
+                registros={registrosLinea}
+                onClickLinea={(linea) => setLineaModalEstado(linea)}
+              />
             </section>
 
             {/* ======================================================== */}
@@ -1125,7 +1269,44 @@ function Dashboard({ onLogout }) {
                 </div>
               )}
             </section>
+
+            {/* ======================================================== */}
+            {/* BITÁCORA INDIVIDUAL DE REGISTROS DE FONDEO (AUDITADA)   */}
+            {/* ======================================================== */}
+            <GestionRegistros
+              registros={registrosLinea}
+              lineaNombre={datos?.nombre_linea}
+              onMutacionExitosa={async () => {
+                await recargarMetricas(lineaSeleccionada);
+                try {
+                  const lineasActualizadas = await obtenerLineas();
+                  setLineas(Array.isArray(lineasActualizadas) ? lineasActualizadas : []);
+                } catch (e) {
+                  console.error('Error al sincronizar líneas tras mutación:', e);
+                }
+              }}
+            />
           </>
+        )}
+
+        {/* ======================================================== */}
+        {/* MODAL DE CAMBIO DE ESTADO DE LÍNEA                      */}
+        {/* ======================================================== */}
+        {lineaModalEstado && (
+          <ModalEstadoLinea
+            linea={lineaModalEstado}
+            onClose={() => setLineaModalEstado(null)}
+            onEstadoActualizado={async () => {
+              setLineaModalEstado(null);
+              try {
+                const lineasActualizadas = await obtenerLineas();
+                setLineas(Array.isArray(lineasActualizadas) ? lineasActualizadas : []);
+              } catch (e) {
+                console.error('Error al actualizar líneas tras cambio de estado:', e);
+              }
+              await recargarMetricas(lineaSeleccionada);
+            }}
+          />
         )}
       </main>
     </div>
@@ -1670,6 +1851,51 @@ const styles = {
     color: '#334155',
     fontSize: '12px',
     fontWeight: 600,
+  },
+  // Banners de Alerta por Muerto fuera de Área Designada (Riesgo de Multa)
+  alertConcesionBanner: {
+    backgroundColor: '#fff7ed',
+    border: '1px solid #fed7aa',
+    borderLeft: '6px solid #ea580c',
+    borderRadius: '12px',
+    padding: '18px 22px',
+    display: 'flex',
+    alignItems: 'flex-start',
+    gap: '16px',
+    boxShadow: '0 3px 8px rgba(234, 88, 12, 0.12)',
+  },
+  alertConcesionIconCircle: {
+    width: '40px',
+    height: '40px',
+    borderRadius: '10px',
+    backgroundColor: '#ea580c',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  alertConcesionHeading: {
+    margin: 0,
+    fontSize: '16px',
+    fontWeight: 700,
+    color: '#9a3412',
+    lineHeight: 1.4,
+  },
+  concesionSeverityBadge: {
+    color: '#ffffff',
+    backgroundColor: '#c2410c',
+    fontSize: '11px',
+    fontWeight: 700,
+    padding: '3px 10px',
+    borderRadius: '999px',
+    letterSpacing: '0.5px',
+    textTransform: 'uppercase',
+  },
+  alertConcesionMessage: {
+    margin: '4px 0 0 0',
+    fontSize: '13.5px',
+    color: '#9a3412',
+    lineHeight: 1.5,
   },
 };
 
